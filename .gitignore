@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+*.log
+t-invest-workspace/
+skill/scripts/tinvest.cjs
+*.skill
+.claude/settings.local.json
