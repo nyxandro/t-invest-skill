@@ -14,7 +14,6 @@
  * - loadCatalog(api, kind, mode, now, cacheDir?) — универсальная загрузка;
  * - catalogCachePath(cacheDir, contour, kind) — путь к файлу кэша.
  */
-import fs from 'node:fs';
 import path from 'node:path';
 import type {
   BondListItem,
@@ -26,6 +25,11 @@ import type {
   SharesResponse,
 } from '../api/types-catalog.js';
 import { CATALOG_CACHE_DIR, CATALOG_CACHE_TTL_MS, type TInvestMode } from '../config/config.js';
+import { readVersionedCache, writeVersionedCache } from './file-cache.js';
+
+// Версия схемы файла кэша справочника: поднять при изменении набора полей
+// списков Bonds/Shares/Etfs, чтобы после обновления CLI старый кэш не читался.
+const CATALOG_CACHE_SCHEMA_VERSION = 1;
 
 export interface CatalogApi {
   getBonds(): Promise<BondsResponse>;
@@ -61,20 +65,17 @@ export function catalogCachePath(cacheDir: string, contour: string, kind: Catalo
   return path.join(cacheDir, `catalog-${contour}-${kind}.json`);
 }
 
-// Чтение кэша: null, если файла нет, он битый или протух. Битый файл — не
-// фатальная ошибка (это кэш, источник истины — API), но предупреждаем.
+// Чтение кэша: null, если файла нет, он битый, иной версии схемы или протух.
+// Битый файл и устаревшая схема — не фатальны (источник истины — API).
 function readFreshCache(filePath: string, now: Date): CatalogCacheFile | null {
-  if (!fs.existsSync(filePath)) {
+  const cache = readVersionedCache<Partial<CatalogCacheFile>>(
+    filePath,
+    CATALOG_CACHE_SCHEMA_VERSION,
+    'справочника',
+  );
+  if (!cache) {
     return null;
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch {
-    console.error(`Предупреждение: файл кэша справочника повреждён и будет перезаписан: ${filePath}`);
-    return null;
-  }
-  const cache = parsed as Partial<CatalogCacheFile>;
   if (typeof cache.savedAt !== 'string' || !Array.isArray(cache.items)) {
     console.error(`Предупреждение: файл кэша справочника имеет неверный формат и будет перезаписан: ${filePath}`);
     return null;
@@ -86,13 +87,9 @@ function readFreshCache(filePath: string, now: Date): CatalogCacheFile | null {
   return cache as CatalogCacheFile;
 }
 
-// Атомарная запись кэша: во временный файл + rename, чтобы параллельный
-// запуск CLI не прочитал наполовину записанный JSON.
+// Атомарная запись кэша через общий версионированный слой.
 function writeCache(filePath: string, cache: CatalogCacheFile): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmpPath = `${filePath}.tmp-${process.pid}`;
-  fs.writeFileSync(tmpPath, JSON.stringify(cache));
-  fs.renameSync(tmpPath, filePath);
+  writeVersionedCache(filePath, CATALOG_CACHE_SCHEMA_VERSION, cache);
 }
 
 async function fetchCatalog<K extends CatalogKind>(

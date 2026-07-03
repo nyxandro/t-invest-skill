@@ -3,6 +3,9 @@
  *
  * Экспорты:
  * - BondCashFlow — денежный поток {date, amount};
+ * - couponAmount(coupon) — выплата на одну облигацию (number) или null, если
+ *   купон не объявлен (protobuf опускает/обнуляет payOneBond) — единый хелпер
+ *   для карточки, скринера и календаря дохода;
  * - computeEffectiveYtmPercent(flows, dirtyPrice, settlement) — эффективная
  *   годовая доходность к погашению (XIRR-подход, ACT/365), %;
  * - computeMacaulayDurationYears(flows, ytmPercent, settlement) — дюрация
@@ -14,14 +17,26 @@
  * функции возвращают null — вызывающий код обязан показать «данных нет»,
  * а не ноль.
  */
+import { MS_PER_YEAR } from '../config/config.js';
+import { moneyToNumber } from '../api/money.js';
+import type { BondCoupon } from '../api/types.js';
 
 export interface BondCashFlow {
   date: Date;
   amount: number; // выплата в валюте номинала (купон или погашение)
 }
 
-// ACT/365: год считаем как 365 дней — стандарт котирования доходности на МосБирже.
-const MS_PER_YEAR = 365 * 24 * 3600 * 1000;
+// Выплата на одну облигацию по купону. Ловушка API: protobuf-JSON опускает
+// незаполненный payOneBond, а нулевое значение неотличимо от «не объявлен»
+// (характерно для будущих купонов флоатеров) — в обоих случаях возвращаем null,
+// чтобы вызывающий не считал доходность по несуществующему/нулевому купону.
+export function couponAmount(coupon: BondCoupon): number | null {
+  if (!coupon.payOneBond) {
+    return null;
+  }
+  const value = moneyToNumber(coupon.payOneBond);
+  return value > 0 ? value : null;
+}
 
 // Границы и точность бисекции: доходности за пределами (-90%, +1000%)
 // для торгуемых облигаций не встречаются, а если NPV не меняет знак на

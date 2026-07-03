@@ -6,8 +6,8 @@
  * - T_INVEST_MODES — список режимов, TOKEN_ENV_VARS — имя env-переменной токена
  *   для каждого режима;
  * - T_INVEST_BASE_URL / T_INVEST_SANDBOX_BASE_URL — REST-шлюзы контуров;
- * - REQUEST_TIMEOUT_MS, DEFAULT_OPERATIONS_DAYS, DEFAULT_SANDBOX_PAYIN_RUB,
- *   MAX_SANDBOX_PAYIN_RUB — числовые константы;
+ * - REQUEST_TIMEOUT_MS, MS_PER_DAY, MS_PER_YEAR, DEFAULT_OPERATIONS_DAYS,
+ *   DEFAULT_SANDBOX_PAYIN_RUB, MAX_SANDBOX_PAYIN_RUB — числовые константы;
  * - GLOBAL_ENV_PATH — путь к глобальному .env;
  * - parseMode(raw) — валидация значения --mode;
  * - baseUrlForMode(mode) — выбор контура API;
@@ -41,6 +41,14 @@ export const T_INVEST_BASE_URL = 'https://invest-public-api.tinkoff.ru/rest';
 export const T_INVEST_SANDBOX_BASE_URL = 'https://sandbox-invest-public-api.tinkoff.ru/rest';
 
 export const REQUEST_TIMEOUT_MS = 30_000;
+
+// Единицы времени в миллисекундах — единый источник для всех расчётов дат
+// и доходностей (не дублировать по командам). MS_PER_YEAR по конвенции ACT/365
+// (год = 365 дней) — стандарт котирования доходности на МосБирже; та же
+// конвенция обязана использоваться и в YTM облигаций, и в XIRR портфеля,
+// иначе доходности из разных команд перестают быть сопоставимыми.
+export const MS_PER_DAY = 24 * 60 * 60 * 1000;
+export const MS_PER_YEAR = 365 * MS_PER_DAY;
 
 export const DEFAULT_OPERATIONS_DAYS = 30;
 

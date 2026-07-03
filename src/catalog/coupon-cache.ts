@@ -7,15 +7,15 @@
  *
  * Экспорты:
  * - CouponCache — карта uid → {savedAt, events};
- * - loadCouponCache(filePath) — чтение (битый файл → пустой кэш + warning);
- * - saveCouponCache(filePath, cache) — атомарная запись;
+ * - loadCouponCache(filePath) — чтение (битый/иная версия → пустой кэш);
+ * - saveCouponCache(filePath, cache) — атомарная запись со слиянием;
  * - couponCachePath(cacheDir, contour) — путь к файлу;
- * - getFreshCouponEntry(cache, uid, now) — запись, если она не протухла.
+ * - getFreshCouponEntry(cache, uid, now) — валидная и не протухшая запись.
  */
-import fs from 'node:fs';
 import path from 'node:path';
 import type { BondCoupon } from '../api/types.js';
 import { COUPON_CACHE_TTL_MS } from '../config/config.js';
+import { readVersionedCache, writeVersionedCache } from './file-cache.js';
 
 export interface CouponCacheEntry {
   savedAt: string;
@@ -24,29 +24,25 @@ export interface CouponCacheEntry {
 
 export type CouponCache = Record<string, CouponCacheEntry>;
 
+// Версия схемы записи кэша купонов: поднять при изменении формата CouponCacheEntry.
+const COUPON_CACHE_SCHEMA_VERSION = 1;
+
 export function couponCachePath(cacheDir: string, contour: string): string {
   return path.join(cacheDir, `coupons-${contour}.json`);
 }
 
 export function loadCouponCache(filePath: string): CouponCache {
-  if (!fs.existsSync(filePath)) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as CouponCache;
-    return typeof parsed === 'object' && parsed !== null ? parsed : {};
-  } catch {
-    console.error(`Предупреждение: кэш купонов повреждён и будет перезаписан: ${filePath}`);
-    return {};
-  }
+  const cache = readVersionedCache<CouponCache>(filePath, COUPON_CACHE_SCHEMA_VERSION, 'купонов');
+  return cache && typeof cache === 'object' ? cache : {};
 }
 
-// Атомарная запись (tmp + rename) — параллельный CLI не увидит пол-файла.
+// Запись со слиянием: скринер читает кэш ДО многоминутного фетча купонов,
+// поэтому прямая перезапись всего файла затирала бы записи параллельного
+// процесса. Записи аддитивны по uid — перечитываем актуальный файл и сливаем
+// свои поверх, сводя потерю обновлений при конкурентных запусках к минимуму.
 export function saveCouponCache(filePath: string, cache: CouponCache): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmpPath = `${filePath}.tmp-${process.pid}`;
-  fs.writeFileSync(tmpPath, JSON.stringify(cache));
-  fs.renameSync(tmpPath, filePath);
+  const current = loadCouponCache(filePath);
+  writeVersionedCache(filePath, COUPON_CACHE_SCHEMA_VERSION, { ...current, ...cache });
 }
 
 export function getFreshCouponEntry(
@@ -55,7 +51,10 @@ export function getFreshCouponEntry(
   now: Date,
 ): CouponCacheEntry | null {
   const entry = cache[uid];
-  if (!entry) {
+  // Валидация структуры записи: запись со свежим savedAt, но events не-массивом
+  // (ручная правка файла или дрейф схемы) раньше проходила проверку свежести и
+  // позже роняла скринер на events.filter — отсекаем такую запись здесь.
+  if (!entry || typeof entry.savedAt !== 'string' || !Array.isArray(entry.events)) {
     return null;
   }
   const age = now.getTime() - Date.parse(entry.savedAt);

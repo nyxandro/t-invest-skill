@@ -10,8 +10,10 @@ import {
   computeCurrentCouponYieldPercent,
   computeEffectiveYtmPercent,
   computeMacaulayDurationYears,
+  couponAmount,
   type BondCashFlow,
 } from './bond-math.js';
+import type { BondCoupon } from '../api/types.js';
 
 // Точка отсчёта всех тестов: покупка 1 января 2026 (UTC).
 const SETTLEMENT = new Date('2026-01-01T00:00:00Z');
@@ -99,5 +101,24 @@ describe('computeCurrentCouponYieldPercent', () => {
   it('нулевая цена или купон без значения → null', () => {
     expect(computeCurrentCouponYieldPercent(165, 0)).toBeNull();
     expect(computeCurrentCouponYieldPercent(null, 1006)).toBeNull();
+  });
+});
+
+describe('couponAmount', () => {
+  const coupon = (payOneBond?: BondCoupon['payOneBond']): BondCoupon => ({
+    couponDate: '2026-06-01T00:00:00Z',
+    ...(payOneBond ? { payOneBond } : {}),
+  });
+
+  it('возвращает выплату на облигацию, когда payOneBond задан', () => {
+    expect(couponAmount(coupon({ currency: 'rub', units: '34', nano: 500000000 }))).toBe(34.5);
+  });
+
+  it('возвращает null, когда payOneBond опущен (protobuf опускает незаполненное = купон не объявлен)', () => {
+    expect(couponAmount(coupon())).toBeNull();
+  });
+
+  it('трактует нулевой купон как «не объявлен» (null), а не как 0', () => {
+    expect(couponAmount(coupon({ currency: 'rub', units: '0', nano: 0 }))).toBeNull();
   });
 });
