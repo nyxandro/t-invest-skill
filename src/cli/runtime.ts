@@ -7,8 +7,10 @@
  * - runCommand(cmd, fn) — общий обработчик команды с API-клиентом:
  *   сессия → режим+токен → клиент нужного контура → бизнес-функция → вывод;
  * - runSessionCommand(cmd, fn) — обработчик команд session без API-клиента;
- * - parsePositiveInt(raw, optionName, max?) — валидация целочисленных опций;
- * - parsePositiveNumber(raw, optionName) — валидация числовых опций (цены);
+ * - parsePositiveInt(raw, optionName, max?) — строгая десятичная валидация
+ *   целочисленных опций (лоты, дни, суммы): без научной/hex-записи и знаков;
+ * - parsePositiveNumber(raw, optionName) — строгая десятичная валидация
+ *   числовых опций (цены): без научной/hex-записи и знаков;
  * - withChart(json, view, human, chart?) — единый способ приложить ASCII-график
  *   к выводу команды (в --json отдельным полем chart, иначе блоком снизу).
  */
@@ -122,11 +124,23 @@ export function withChart(
   return json ? { ...view, chart } : `${human}\n\n${chart}`;
 }
 
-// Валидация целочисленной опции CLI: положительное целое в пределах max.
+// Строгие форматы ввода. Голый Number() в денежном CLI недопустим: он молча
+// принимает научную/hex/двоичную запись и знаки («1e3» → 1000, «0x0A» → 10,
+// «+5» → 5), из-за чего опечатка в количестве/цене превратилась бы в заявку на
+// неожиданный объём. Поэтому формат сначала проверяем регуляркой по строке, и
+// только затем — Number() и диапазон.
+const DECIMAL_INT_RE = /^\d+$/; // только десятичные цифры
+const DECIMAL_NUMBER_RE = /^\d+(\.\d+)?$/; // целое или дробь с цифрами по обе стороны точки
+
+// Валидация целочисленной опции CLI: положительное десятичное целое в пределах
+// max. Дополнительно требуем безопасное целое: за MAX_SAFE_INTEGER Number
+// теряет точность (и String() может дать экспоненту) — такое значение уже не
+// буквальное, а значит невалидно как количество лотов/сумма.
 export function parsePositiveInt(raw: string, optionName: string, max?: number): number {
-  const value = Number(raw);
+  const trimmed = raw.trim();
+  const value = Number(trimmed);
   const withinMax = max === undefined || value <= max;
-  if (!Number.isInteger(value) || value <= 0 || !withinMax) {
+  if (!DECIMAL_INT_RE.test(trimmed) || !Number.isSafeInteger(value) || value <= 0 || !withinMax) {
     const range = max === undefined ? 'положительным целым числом' : `целым числом от 1 до ${max}`;
     throw new AppError({
       code: 'APP_CLI_INVALID_ARGUMENT',
@@ -136,10 +150,14 @@ export function parsePositiveInt(raw: string, optionName: string, max?: number):
   return value;
 }
 
-// Валидация числовой опции CLI (цены, проценты): конечное положительное число.
+// Валидация числовой опции CLI (цены, проценты): строго десятичное положительное
+// число (без научной/hex-записи и знаков). Регулярка уже гарантирует конечность
+// и десятичный формат, поэтому остаётся проверить положительность (регэксп
+// пропускает «0»/«0.0»).
 export function parsePositiveNumber(raw: string, optionName: string): number {
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value <= 0) {
+  const trimmed = raw.trim();
+  const value = Number(trimmed);
+  if (!DECIMAL_NUMBER_RE.test(trimmed) || value <= 0) {
     throw new AppError({
       code: 'APP_CLI_INVALID_ARGUMENT',
       userMessage: `Параметр ${optionName} должен быть положительным числом, получено «${raw}».`,

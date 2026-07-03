@@ -5459,10 +5459,13 @@ function withChart(json, view, human, chart) {
 
 ${chart}`;
 }
+var DECIMAL_INT_RE = /^\d+$/;
+var DECIMAL_NUMBER_RE = /^\d+(\.\d+)?$/;
 function parsePositiveInt(raw, optionName, max) {
-  const value = Number(raw);
+  const trimmed = raw.trim();
+  const value = Number(trimmed);
   const withinMax = max === void 0 || value <= max;
-  if (!Number.isInteger(value) || value <= 0 || !withinMax) {
+  if (!DECIMAL_INT_RE.test(trimmed) || !Number.isSafeInteger(value) || value <= 0 || !withinMax) {
     const range = max === void 0 ? "\u043F\u043E\u043B\u043E\u0436\u0438\u0442\u0435\u043B\u044C\u043D\u044B\u043C \u0446\u0435\u043B\u044B\u043C \u0447\u0438\u0441\u043B\u043E\u043C" : `\u0446\u0435\u043B\u044B\u043C \u0447\u0438\u0441\u043B\u043E\u043C \u043E\u0442 1 \u0434\u043E ${max}`;
     throw new AppError({
       code: "APP_CLI_INVALID_ARGUMENT",
@@ -5472,8 +5475,9 @@ function parsePositiveInt(raw, optionName, max) {
   return value;
 }
 function parsePositiveNumber(raw, optionName) {
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value <= 0) {
+  const trimmed = raw.trim();
+  const value = Number(trimmed);
+  if (!DECIMAL_NUMBER_RE.test(trimmed) || value <= 0) {
     throw new AppError({
       code: "APP_CLI_INVALID_ARGUMENT",
       userMessage: `\u041F\u0430\u0440\u0430\u043C\u0435\u0442\u0440 ${optionName} \u0434\u043E\u043B\u0436\u0435\u043D \u0431\u044B\u0442\u044C \u043F\u043E\u043B\u043E\u0436\u0438\u0442\u0435\u043B\u044C\u043D\u044B\u043C \u0447\u0438\u0441\u043B\u043E\u043C, \u043F\u043E\u043B\u0443\u0447\u0435\u043D\u043E \xAB${raw}\xBB.`
