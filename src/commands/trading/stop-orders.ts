@@ -25,6 +25,7 @@ import { renderTable } from '../../format/table.js';
 import { formatMoscowDate } from '../../format/datetime.js';
 import { DASH } from '../../format/values.js';
 import { directionFromApi, directionLabel, stopDirectionToApi } from '../../format/direction.js';
+import { appendTradeAudit } from '../../util/audit.js';
 import { mapWithConcurrency } from '../../util/concurrency.js';
 import { resolveAccountId } from '../resolve-account.js';
 import { resolveLabelByFigi } from '../resolve-instrument.js';
@@ -97,7 +98,7 @@ export async function placeStopOrder(
     `Ключ идемпотентности стоп-заявки: ${clientOrderId}. Для повтора: --order-id ${clientOrderId}`,
   );
   const resp = await api.call<PostStopOrderResponse>(paths.postStopOrder, request);
-  return {
+  const view: PlacedStopOrderView = {
     stopOrderId: resp.stopOrderId ?? null,
     ticker: instrument.ticker,
     kind: params.kind,
@@ -106,6 +107,19 @@ export async function placeStopOrder(
     stopPrice: params.stopPrice,
     limitPrice: params.limitPrice,
   };
+  appendTradeAudit({
+    at: new Date().toISOString(),
+    mode: params.mode,
+    action: `stop-set:${params.kind}`,
+    ticker: view.ticker,
+    lots: view.lots,
+    orderType: params.direction,
+    price: view.stopPrice,
+    orderId: view.stopOrderId,
+    idempotencyKey: clientOrderId,
+    status: 'выставлена',
+  });
+  return view;
 }
 
 export interface StopOrderView {
@@ -191,6 +205,14 @@ export async function cancelStopOrder(
   const resp = await api.call<CancelStopOrderResponse>(paths.cancelStopOrder, {
     accountId,
     stopOrderId: params.stopOrderId,
+  });
+  appendTradeAudit({
+    at: new Date().toISOString(),
+    mode: params.mode,
+    action: 'stop-cancel',
+    ticker: null,
+    orderId: params.stopOrderId,
+    status: resp.time ? 'отменена' : 'отмена отправлена',
   });
   return { cancelledAt: resp.time ?? null };
 }

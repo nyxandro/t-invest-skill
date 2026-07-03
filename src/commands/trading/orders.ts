@@ -21,6 +21,7 @@ import {
   quotationToNumberOrNull,
 } from '../../api/money.js';
 import type { GetLastPricesResponse } from '../../api/types.js';
+import type { GetOrderBookResponse } from '../../api/types-market.js';
 import type {
   CancelOrderResponse,
   GetMaxLotsResponse,
@@ -30,7 +31,7 @@ import type {
   PostOrderRequest,
   PostOrderResponse,
 } from '../../api/types-trading.js';
-import type { TInvestMode, TradingGate } from '../../config/config.js';
+import { MARKET_ORDER_MAX_SPREAD_PERCENT, type TInvestMode, type TradingGate } from '../../config/config.js';
 import { renderTable } from '../../format/table.js';
 import { DASH } from '../../format/values.js';
 import {
@@ -40,9 +41,10 @@ import {
   orderDirectionToApi,
   type TradeDirection,
 } from '../../format/direction.js';
+import { appendTradeAudit } from '../../util/audit.js';
 import { resolveAccountId, type AccountsApi } from '../resolve-account.js';
 import { resolveInstrument, resolveLabelByFigi, type InstrumentSearchApi } from '../resolve-instrument.js';
-import { assertMutationAllowed, tradingPathsForMode } from './paths.js';
+import { assertMarketOrderLiquidity, assertMutationAllowed, tradingPathsForMode } from './paths.js';
 
 export interface TradingApi extends AccountsApi, InstrumentSearchApi {
   call<T>(methodPath: string, body: unknown): Promise<T>;
@@ -160,6 +162,22 @@ export async function placeOrder(
 
   const clientOrderId = params.orderId ?? randomUUID();
   const orderType = params.limitPrice !== null ? 'limit' : 'market';
+
+  // Гард ликвидности для РЕАЛЬНОЙ рыночной заявки: рыночное исполнение на
+  // неликвиде/широком спреде может сильно проиграть в цене. Смотрим стакан и
+  // блокируем, требуя лимитную. Песочница (виртуальные деньги) не проверяется.
+  if (params.mode === 'full' && orderType === 'market') {
+    const book = await api.call<GetOrderBookResponse>('MarketDataService/GetOrderBook', {
+      instrumentId: instrument.uid,
+      depth: 1,
+    });
+    assertMarketOrderLiquidity(
+      quotationToNumberOrNull(book.bids?.[0]?.price),
+      quotationToNumberOrNull(book.asks?.[0]?.price),
+      MARKET_ORDER_MAX_SPREAD_PERCENT,
+    );
+  }
+
   const request: PostOrderRequest = {
     accountId,
     instrumentId: instrument.uid,
@@ -172,7 +190,24 @@ export async function placeOrder(
   announceIdempotencyKey(clientOrderId);
   const resp = await api.call<PostOrderResponse>(paths.postOrder, request);
   // Направление известно из запроса пользователя — берём его, а не из ответа.
-  return toPlacedView(resp, { ticker: instrument.ticker, direction: params.direction, orderType, clientOrderId });
+  const view = toPlacedView(resp, { ticker: instrument.ticker, direction: params.direction, orderType, clientOrderId });
+  // Аудит исполненной мутации (best-effort, не роняет команду).
+  appendTradeAudit({
+    at: new Date().toISOString(),
+    mode: params.mode,
+    action: params.direction,
+    ticker: view.ticker,
+    lots: view.lotsRequested,
+    orderType,
+    price: view.executedPrice,
+    amount: view.totalAmount,
+    commission: view.commission,
+    currency: view.currency,
+    orderId: view.orderId,
+    idempotencyKey: clientOrderId,
+    status: view.statusText,
+  });
+  return view;
 }
 
 export interface OrderPreviewView {
@@ -330,6 +365,14 @@ export async function cancelOrder(
     accountId,
     orderId: params.orderId,
   });
+  appendTradeAudit({
+    at: new Date().toISOString(),
+    mode: params.mode,
+    action: 'cancel',
+    ticker: null, // у отмены известен только номер заявки
+    orderId: params.orderId,
+    status: resp.time ? 'отменена' : 'отмена отправлена',
+  });
   return { cancelledAt: resp.time ?? null };
 }
 
@@ -364,13 +407,26 @@ export async function replaceOrder(
   // Ответ ReplaceOrder не содержит ticker (только figi) — резолвим бумагу по
   // figi, чтобы в подтверждении не показывать сырой FIGI. Не нашли → figi/orderId.
   const label = await resolveLabelByFigi(api, resp.figi ?? '');
-  return toPlacedView(resp, {
+  const view = toPlacedView(resp, {
     ticker: label?.ticker ?? resp.figi ?? params.orderId,
     // Направление берём из ответа; при отсутствии поля — null, не «покупка».
     direction: directionFromApi(resp.direction),
     orderType: 'limit',
     clientOrderId: idempotencyKey,
   });
+  appendTradeAudit({
+    at: new Date().toISOString(),
+    mode: params.mode,
+    action: 'replace',
+    ticker: view.ticker,
+    lots: params.lots,
+    orderType: 'limit',
+    price: params.price,
+    orderId: view.orderId,
+    idempotencyKey,
+    status: view.statusText,
+  });
+  return view;
 }
 
 // --- Рендеры ---

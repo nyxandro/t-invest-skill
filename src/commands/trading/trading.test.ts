@@ -5,7 +5,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GetAccountsResponse } from '../../api/types.js';
 import type { TradingGate } from '../../config/config.js';
-import { assertMutationAllowed, tradingPathsForMode } from './paths.js';
+import { assertMarketOrderLiquidity, assertMutationAllowed, tradingPathsForMode } from './paths.js';
 import {
   cancelOrder,
   placeOrder,
@@ -14,6 +14,10 @@ import {
   type TradingApi,
 } from './orders.js';
 import { listStopOrders, placeStopOrder } from './stop-orders.js';
+
+// Журнал сделок пишет в реальный ~/.config/tinvest/trades.log — в тестах глушим,
+// чтобы прогон не засорял файл пользователя (сама логика журнала — в audit.test.ts).
+vi.mock('../../util/audit.js', () => ({ appendTradeAudit: () => {} }));
 
 // Гейты реальных сделок из окружения (см. resolveTradingGate):
 // OFF — торговля выключена; CONFIRM — включена, нужна подпись на каждую сделку;
@@ -100,6 +104,27 @@ describe('предохранители торговых команд (лестн
     expect(tradingPathsForMode('sandbox').postOrder).toBe('SandboxService/PostSandboxOrder');
     expect(tradingPathsForMode('full').postOrder).toBe('OrdersService/PostOrder');
     expect(tradingPathsForMode('full').postStopOrder).toBe('StopOrdersService/PostStopOrder');
+  });
+});
+
+describe('assertMarketOrderLiquidity (гард спреда рыночной заявки)', () => {
+  it('узкий спред — проходит', () => {
+    expect(() => assertMarketOrderLiquidity(100, 100.2, 1)).not.toThrow();
+  });
+
+  it('широкий спред — APP_TINVEST_WIDE_SPREAD', () => {
+    expect(() => assertMarketOrderLiquidity(100, 110, 1)).toThrowError(
+      expect.objectContaining({ code: 'APP_TINVEST_WIDE_SPREAD' }),
+    );
+  });
+
+  it('нет двусторонних котировок — APP_TINVEST_ILLIQUID_MARKET', () => {
+    expect(() => assertMarketOrderLiquidity(null, 100, 1)).toThrowError(
+      expect.objectContaining({ code: 'APP_TINVEST_ILLIQUID_MARKET' }),
+    );
+    expect(() => assertMarketOrderLiquidity(100, null, 1)).toThrowError(
+      expect.objectContaining({ code: 'APP_TINVEST_ILLIQUID_MARKET' }),
+    );
   });
 });
 
@@ -190,6 +215,39 @@ describe('placeOrder', () => {
       tradingGate: GATE_STONKS,
     });
     expect(calls[0]?.path).toBe('OrdersService/PostOrder');
+  });
+
+  it('full РЫНОЧНАЯ заявка блокируется при широком спреде (до PostOrder)', async () => {
+    const { api, calls } = makeApi({
+      'MarketDataService/GetOrderBook': {
+        bids: [{ price: { units: '100', nano: 0 }, quantity: '1' }],
+        asks: [{ price: { units: '110', nano: 0 }, quantity: '1' }],
+      },
+    });
+    await expect(
+      placeOrder(api, { mode: 'full', query: 'SBER', lots: 1, direction: 'buy', limitPrice: null, confirm: true, tradingGate: GATE_CONFIRM }),
+    ).rejects.toMatchObject({ code: 'APP_TINVEST_WIDE_SPREAD' });
+    expect(calls.some((c) => c.path === 'OrdersService/PostOrder')).toBe(false);
+  });
+
+  it('full РЫНОЧНАЯ заявка проходит при узком спреде', async () => {
+    const { api, calls } = makeApi({
+      'MarketDataService/GetOrderBook': {
+        bids: [{ price: { units: '100', nano: 0 }, quantity: '1' }],
+        asks: [{ price: { units: '100', nano: 200000000 }, quantity: '1' }],
+      },
+      'OrdersService/PostOrder': { orderId: 'srv-3', executionReportStatus: 'EXECUTION_REPORT_STATUS_FILL' },
+    });
+    await placeOrder(api, { mode: 'full', query: 'SBER', lots: 1, direction: 'buy', limitPrice: null, confirm: true, tradingGate: GATE_CONFIRM });
+    expect(calls.some((c) => c.path === 'OrdersService/PostOrder')).toBe(true);
+  });
+
+  it('full ЛИМИТНАЯ заявка не дёргает стакан (гард только для рыночных)', async () => {
+    const { api, calls } = makeApi({
+      'OrdersService/PostOrder': { orderId: 'srv-4', executionReportStatus: 'EXECUTION_REPORT_STATUS_NEW' },
+    });
+    await placeOrder(api, { mode: 'full', query: 'SBER', lots: 1, direction: 'buy', limitPrice: 300, confirm: true, tradingGate: GATE_CONFIRM });
+    expect(calls.some((c) => c.path === 'MarketDataService/GetOrderBook')).toBe(false);
   });
 });
 
