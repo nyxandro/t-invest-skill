@@ -11,12 +11,12 @@
  *   tech <query> — RSI/SMA/MACD с нейтральными наблюдениями.
  */
 import type { Command } from 'commander';
-import { fetchHistory, renderHistory } from '../commands/history.js';
+import { fetchHistory, renderHistory, renderHistoryChart } from '../commands/history.js';
 import { fetchInstrumentCard, renderInstrumentCard } from '../commands/instrument.js';
 import { fetchOrderBook, renderOrderBook } from '../commands/orderbook.js';
 import { fetchTech, renderTech } from '../commands/tech.js';
 import { DEFAULT_HISTORY_DAYS, ORDERBOOK_DEPTH_DEFAULT, ORDERBOOK_DEPTH_MAX } from '../config/config.js';
-import { parsePositiveInt, runCommand } from './runtime.js';
+import { parsePositiveInt, runCommand, withChart } from './runtime.js';
 
 export function registerMarketCommands(program: Command): void {
   program
@@ -25,7 +25,8 @@ export function registerMarketCommands(program: Command): void {
     .argument('<query>', 'тикер или ISIN (индексы тоже: IMOEX, RTSI)')
     .option('-d, --days <n>', 'период в днях', String(DEFAULT_HISTORY_DAYS))
     .option('--vs <ticker>', 'сравнить с бенчмарком (например, IMOEX)')
-    .action(async (query: string, opts: { days: string; vs?: string }, cmd: Command) =>
+    .option('--chart', 'добавить брайль-линию цены закрытия за период')
+    .action(async (query: string, opts: { days: string; vs?: string; chart?: boolean }, cmd: Command) =>
       runCommand(cmd, async (client, json) => {
         const view = await fetchHistory(client, {
           query,
@@ -34,7 +35,7 @@ export function registerMarketCommands(program: Command): void {
           now: new Date(),
         });
         // В человекочитаемом выводе свечи опускаем — это массив для анализа.
-        return json ? view : renderHistory(view);
+        return withChart(json, view, renderHistory(view), opts.chart ? renderHistoryChart(view) : undefined);
       }),
     );
 

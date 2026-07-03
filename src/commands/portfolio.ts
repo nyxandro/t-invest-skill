@@ -7,9 +7,11 @@
  * - buildPortfolioView(resp, namesByUid?) — конвертация ответа API в представление;
  * - fetchPortfolio(api, explicitAccountId?) — выбор счёта + загрузка +
  *   обогащение позиций полными названиями инструментов + сборка;
- * - renderPortfolio(view) — человекочитаемый вывод (сводка + таблица).
+ * - renderPortfolio(view) — человекочитаемый вывод (сводка + таблица);
+ * - renderPortfolioChart(view) — ASCII-бары позиций по стоимости (вклад в портфель).
  */
 import {
+  currencySymbol,
   formatAmount,
   formatSigned,
   moneyToNumber,
@@ -20,6 +22,7 @@ import {
 } from '../api/money.js';
 import type { GetInstrumentByResponse, PortfolioResponse } from '../api/types.js';
 import { BATCH_CONCURRENCY, BATCH_MIN_INTERVAL_MS } from '../config/config.js';
+import { barChart, type BarChartItem } from '../format/charts.js';
 import { renderTable, truncate } from '../format/table.js';
 import { DASH, moneyOrDash } from '../format/values.js';
 import { mapWithConcurrency } from '../util/concurrency.js';
@@ -186,4 +189,28 @@ export function renderPortfolio(view: PortfolioView): string {
   );
 
   return `${header}\n${table}`;
+}
+
+// Позиция с известной стоимостью (не валюта/кэш) — предикат сужает value к number,
+// чтобы бары строились без прочерков и без выдуманных нулей.
+function hasChartableValue(
+  position: PortfolioPositionView,
+): position is PortfolioPositionView & { value: number } {
+  return position.value !== null && position.instrumentType !== 'currency';
+}
+
+// Бары позиций по стоимости: наглядно показывают вклад каждой бумаги в портфель
+// («что занимает больше»). P/L остаётся в таблице — здесь только величины стоимости.
+export function renderPortfolioChart(view: PortfolioView): string {
+  const positions = view.positions.filter(hasChartableValue).sort((a, b) => b.value - a.value);
+  if (positions.length === 0) {
+    return 'График недоступен: нет позиций с оценкой стоимости.';
+  }
+  const currency = currencySymbol(view.currency);
+  const items: BarChartItem[] = positions.map((p) => ({
+    label: p.ticker,
+    value: p.value,
+    note: `${formatAmount(p.value, 0)} ${currency}`,
+  }));
+  return ['Позиции по стоимости (вклад в портфель):', barChart(items)].join('\n');
 }

@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { InstrumentDetails, PortfolioPosition } from '../api/types.js';
-import { buildAllocationView } from './allocation.js';
+import { buildAllocationView, renderAllocationChart } from './allocation.js';
 
 const position = (over: Partial<PortfolioPosition>): PortfolioPosition => ({
   figi: 'figi-x',
@@ -133,5 +133,42 @@ describe('buildAllocationView', () => {
     });
     expect(view.byType[0]?.key).toBe('валюта и кэш');
     expect(view.bySector[0]?.key).toBe('валюта и кэш');
+  });
+});
+
+describe('renderAllocationChart', () => {
+  it('строит бары по секторам и классам активов с долями', () => {
+    // Портфель 10 000: акции ИТ 6 000 (60%) + облигации industrials 4 000 (40%).
+    const view = buildAllocationView({
+      accountId: 'acc',
+      positions: [
+        position({
+          instrumentType: 'share',
+          instrumentUid: 'u1',
+          quantity: { units: '1', nano: 0 },
+          currentPrice: { currency: 'rub', units: '6000', nano: 0 },
+        }),
+        position({
+          instrumentType: 'bond',
+          instrumentUid: 'u2',
+          quantity: { units: '1', nano: 0 },
+          currentPrice: { currency: 'rub', units: '4000', nano: 0 },
+        }),
+      ],
+      detailsByUid: new Map([
+        ['u1', details({ uid: 'u1', sector: 'it' })],
+        ['u2', details({ uid: 'u2', sector: 'industrials' })],
+      ]),
+      totalValue: 10000,
+      currency: 'rub',
+    });
+    const out = renderAllocationChart(view);
+    expect(out).toContain('Структура по секторам');
+    expect(out).toContain('По классам активов');
+    expect(out).toContain('акции');
+    expect(out).toContain('облигации');
+    expect(out).toContain('it');
+    expect(out).toContain('█');
+    expect(out).toContain('%');
   });
 });

@@ -7,7 +7,8 @@
  * - pickCandleInterval(days) — выбор интервала под лимиты API;
  * - computeCandleStats(candles, interval) — чистая статистика по свечам;
  * - fetchHistory(api, params) — загрузка + сборка представления;
- * - renderHistory(view) — человекочитаемый отчёт.
+ * - renderHistory(view) — человекочитаемый отчёт;
+ * - renderHistoryChart(view) — брайль-линия цены закрытия за период.
  *
  * Резолв инструмента (в т.ч. индексов IMOEX/RTSI через индикативы) вынесен в
  * общий resolveMarketInstrument из resolve-instrument.ts — единый для всех
@@ -26,6 +27,7 @@ import {
   MONTHS_PER_YEAR,
   MS_PER_DAY,
 } from '../config/config.js';
+import { brailleLineChart } from '../format/charts.js';
 import { DASH } from '../format/values.js';
 import { resolveMarketInstrument, type MarketInstrumentApi } from './resolve-instrument.js';
 
@@ -247,4 +249,17 @@ export function renderHistory(view: HistoryView): string {
     );
   }
   return lines.join('\n');
+}
+
+// Брайль-линия цены закрытия за период. Свечи без цены (close=null) отбрасываем —
+// они не должны искажать масштаб; при менее чем двух точках график не строим.
+export function renderHistoryChart(view: HistoryView): string {
+  const closes = view.candles.map((c) => c.close).filter((v): v is number => v !== null);
+  if (closes.length < 2) {
+    return 'График недоступен: недостаточно свечей за период.';
+  }
+  const period = `${view.from.slice(0, 10)} — ${view.to.slice(0, 10)}`;
+  const header = `${view.ticker} — ${view.name}, цена закрытия (${period}):`;
+  const chart = brailleLineChart(closes, { formatValue: (value) => formatAmount(value, 2) });
+  return [header, '', chart].join('\n');
 }

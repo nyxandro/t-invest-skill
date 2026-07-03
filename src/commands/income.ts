@@ -7,7 +7,8 @@
  * - IncomeEventView — событие выплаты (купон/дивиденд) с суммой на позицию;
  * - buildIncomeView(params) — чистая сборка календаря (тестируется без API);
  * - fetchIncome(api, params) — загрузка портфеля + выплат + сборка;
- * - renderIncome(view) — человекочитаемый календарь.
+ * - renderIncome(view) — человекочитаемый календарь;
+ * - renderIncomeChart(view) — ASCII-бары рублёвого дохода по месяцам.
  */
 import { moneyToNumber, quotationToNumber, formatAmount, round } from '../api/money.js';
 import type {
@@ -20,6 +21,7 @@ import type {
   PortfolioResponse,
 } from '../api/types.js';
 import { BATCH_CONCURRENCY, BATCH_MIN_INTERVAL_MS, INCOME_HORIZON_DAYS, MS_PER_DAY } from '../config/config.js';
+import { barChart, type BarChartItem } from '../format/charts.js';
 // MOSCOW_OFFSET_MS — для расчёта начала московских суток (граница «прошлого»).
 import { MOSCOW_OFFSET_MS } from '../format/datetime.js';
 import { renderTable } from '../format/table.js';
@@ -293,4 +295,34 @@ export function renderIncome(view: IncomeView): string {
     parts.push('', `⚠ ${warning}`);
   }
   return parts.join('\n');
+}
+
+// Короткие русские подписи месяцев для оси графика (индекс 0 = январь).
+const CHART_MONTH_LABELS = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+const CHART_INCOME_BAR_WIDTH = 30; // длина бара: месяцы почти всегда мелкие рядом с купонным пиком
+const CHART_INCOME_LABEL_WIDTH = 8; // «авг 26» — фиксируем колонку под подпись месяца
+
+// «2026-08» → «авг 26». Для нераспознанного месяца оставляем исходный номер
+// (UI-подпись, а не подмена данных).
+function formatMonthLabel(month: string): string {
+  const [year = '', mon = ''] = month.split('-');
+  const label = CHART_MONTH_LABELS[Number(mon) - 1] ?? mon;
+  return `${label} ${year.slice(2)}`;
+}
+
+// Бары рублёвого дохода по месяцам. monthlyTotals в представлении — только rub
+// (валютные выплаты в итоги не входят, см. buildIncomeView), поэтому знак валюты фиксирован.
+export function renderIncomeChart(view: IncomeView): string {
+  if (view.monthlyTotals.length === 0) {
+    return 'График недоступен: нет объявленных рублёвых выплат в горизонте.';
+  }
+  const items: BarChartItem[] = view.monthlyTotals.map((m) => ({
+    label: formatMonthLabel(m.month),
+    value: m.total,
+    note: `${formatAmount(m.total, 0)} ₽`,
+  }));
+  return [
+    `Пассивный доход по месяцам (итого ${formatAmount(view.horizonTotal, 0)} ₽):`,
+    barChart(items, { width: CHART_INCOME_BAR_WIDTH, labelWidth: CHART_INCOME_LABEL_WIDTH }),
+  ].join('\n');
 }

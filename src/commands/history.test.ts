@@ -9,9 +9,11 @@ import {
   computeCandleStats,
   fetchHistory,
   pickCandleInterval,
+  renderHistoryChart,
   toCandleViews,
   type CandleView,
   type HistoryApi,
+  type HistoryView,
 } from './history.js';
 
 describe('pickCandleInterval', () => {
@@ -113,5 +115,43 @@ describe('fetchHistory (K40)', () => {
     expect(api.findInstrument).not.toHaveBeenCalled();
     expect(api.getIndicatives).not.toHaveBeenCalled();
     expect(api.getCandles).not.toHaveBeenCalled();
+  });
+});
+
+describe('renderHistoryChart', () => {
+  const baseView: HistoryView = {
+    ticker: 'SBER',
+    name: 'Сбер Банк',
+    instrumentKind: 'instrument',
+    from: '2026-04-01T00:00:00Z',
+    to: '2026-07-01T00:00:00Z',
+    interval: 'CANDLE_INTERVAL_DAY',
+    stats: computeCandleStats([], 'CANDLE_INTERVAL_DAY'),
+    candles: [],
+    benchmark: null,
+  };
+
+  it('строит брайль-линию по ценам закрытия с заголовком и осью', () => {
+    const candles: CandleView[] = [10, 11, 12, 13, 14].map((close, i) => ({
+      time: `2026-06-0${i + 1}T00:00:00Z`,
+      open: close,
+      high: close,
+      low: close,
+      close,
+      volume: 100,
+    }));
+    const out = renderHistoryChart({ ...baseView, candles });
+    expect(out).toContain('SBER — Сбер Банк');
+    expect(out).toContain('цена закрытия');
+    expect(out).toContain('│'); // вертикальная ось
+    expect(/[⠁-⣿]/.test(out)).toBe(true); // хотя бы одна точка Брайля
+  });
+
+  it('менее двух свечей с ценой — сообщение вместо графика', () => {
+    const out = renderHistoryChart({
+      ...baseView,
+      candles: [{ time: 't', open: null, high: null, low: null, close: null, volume: null }],
+    });
+    expect(out).toContain('недостаточно свечей');
   });
 });

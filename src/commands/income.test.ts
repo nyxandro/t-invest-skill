@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { BondCoupon, DividendItem, PortfolioPosition } from '../api/types.js';
-import { buildIncomeView } from './income.js';
+import { buildIncomeView, renderIncomeChart, type IncomeView } from './income.js';
 
 const now = new Date('2026-07-02T00:00:00Z');
 
@@ -135,5 +135,36 @@ describe('buildIncomeView', () => {
       ]),
     });
     expect(view.events).toHaveLength(0);
+  });
+});
+
+describe('renderIncomeChart', () => {
+  const baseView: IncomeView = {
+    accountId: 'acc',
+    from: '2026-07-01',
+    to: '2027-07-01',
+    events: [],
+    monthlyTotals: [],
+    horizonTotal: 0,
+    warnings: [],
+  };
+
+  it('строит бары по месяцам с русскими подписями и итогом', () => {
+    const out = renderIncomeChart({
+      ...baseView,
+      monthlyTotals: [
+        { month: '2026-07', total: 40 },
+        { month: '2026-08', total: 1333 },
+      ],
+      horizonTotal: 1373,
+    });
+    expect(out).toContain('июл 26');
+    expect(out).toContain('авг 26');
+    expect(out).toContain('1 373'); // итог сгруппирован пробелом (formatAmount)
+    expect(out).toContain('█');
+  });
+
+  it('без рублёвых выплат — честное сообщение вместо графика', () => {
+    expect(renderIncomeChart(baseView)).toContain('нет объявленных');
   });
 });

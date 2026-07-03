@@ -22,10 +22,10 @@ import { fetchDividends, renderDividends } from '../commands/dividends.js';
 import { fetchForecast, renderForecast } from '../commands/forecast.js';
 import { fetchFundamentals, renderFundamentals } from '../commands/fundamentals.js';
 import { fetchOperations, renderOperations } from '../commands/operations.js';
-import { fetchPortfolio, renderPortfolio } from '../commands/portfolio.js';
+import { fetchPortfolio, renderPortfolio, renderPortfolioChart } from '../commands/portfolio.js';
 import { getQuotes, renderQuotes } from '../commands/quote.js';
 import { renderSearchResults, searchInstruments } from '../commands/search.js';
-import { parsePositiveInt, runCommand } from './runtime.js';
+import { parsePositiveInt, runCommand, withChart } from './runtime.js';
 
 export function registerCoreCommands(program: Command): void {
   program
@@ -42,10 +42,11 @@ export function registerCoreCommands(program: Command): void {
     .command('portfolio')
     .description('портфель: позиции, стоимость, P/L')
     .option('-a, --account <id>', 'идентификатор счёта (см. tinvest accounts)')
-    .action(async (opts: { account?: string }, cmd: Command) =>
+    .option('--chart', 'добавить ASCII-график позиций по стоимости (бары; для сравнения величин)')
+    .action(async (opts: { account?: string; chart?: boolean }, cmd: Command) =>
       runCommand(cmd, async (client, json) => {
         const view = await fetchPortfolio(client, opts.account);
-        return json ? view : renderPortfolio(view);
+        return withChart(json, view, renderPortfolio(view), opts.chart ? renderPortfolioChart(view) : undefined);
       }),
     );
 

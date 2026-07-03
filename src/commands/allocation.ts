@@ -8,12 +8,14 @@
  * - buildAllocationView(positions, details, totalValue) — чистая сборка
  *   представления (тестируется без API);
  * - fetchAllocation(api, explicitAccountId?) — загрузка + сборка;
- * - renderAllocation(view) — человекочитаемый отчёт.
+ * - renderAllocation(view) — человекочитаемый отчёт;
+ * - renderAllocationChart(view) — ASCII-бары структуры (секторы + классы активов).
  */
 import { moneyToNumber, quotationToNumber, formatAmount, round } from '../api/money.js';
 import type { InstrumentDetails, PortfolioPosition, PortfolioResponse } from '../api/types.js';
 import { loadCatalog, type CatalogApi } from '../catalog/instrument-catalog.js';
 import { CONCENTRATION_WARN_PERCENT, type TInvestMode } from '../config/config.js';
+import { barChart, type BarChartItem } from '../format/charts.js';
 import { renderTable } from '../format/table.js';
 import { resolveAccountId, type AccountsApi } from './resolve-account.js';
 
@@ -236,4 +238,22 @@ export function renderAllocation(view: AllocationView): string {
     parts.push('', `⚠ ${warning}`);
   }
   return parts.join('\n');
+}
+
+// Бары структуры портфеля: два среза — по секторам и по классам активов.
+// Доли уже посчитаны в представлении, здесь только раскладка в горизонтальные
+// бары; тонкие срезы получают минимум один символ и не «исчезают» (см. barChart).
+export function renderAllocationChart(view: AllocationView): string {
+  const toItem = (slice: AllocationSlice): BarChartItem => ({
+    label: slice.key,
+    value: slice.weightPercent,
+    note: `${formatAmount(slice.weightPercent, 1)} %`,
+  });
+  return [
+    'Структура по секторам (доля от стоимости):',
+    barChart(view.bySector.map(toItem)),
+    '',
+    'По классам активов:',
+    barChart(view.byType.map(toItem)),
+  ].join('\n');
 }

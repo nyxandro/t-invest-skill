@@ -7,7 +7,7 @@ import { accountsResponseFixture } from '../api/mocks/accounts.fixture.js';
 import { portfolioResponseFixture } from '../api/mocks/portfolio.fixture.js';
 import type { PortfolioResponse } from '../api/types.js';
 import { BATCH_CONCURRENCY } from '../config/config.js';
-import { buildPortfolioView, fetchPortfolio } from './portfolio.js';
+import { buildPortfolioView, fetchPortfolio, renderPortfolioChart } from './portfolio.js';
 
 describe('buildPortfolioView', () => {
   const view = buildPortfolioView(portfolioResponseFixture);
@@ -148,5 +148,29 @@ describe('fetchPortfolio — троттлинг загрузки названи�
     // Все названия резолвятся (поведение сохранено).
     expect(view.positions).toHaveLength(positionCount);
     expect(view.positions.every((p) => p.name !== null)).toBe(true);
+  });
+});
+
+describe('renderPortfolioChart', () => {
+  const view = buildPortfolioView(portfolioResponseFixture);
+
+  it('строит бары позиций по стоимости с символом валюты', () => {
+    const out = renderPortfolioChart(view);
+    expect(out).toContain('Позиции по стоимости');
+    expect(out).toContain('█');
+    expect(out).toContain('₽');
+    // Известные бумаги фикстуры присутствуют как подписи баров.
+    expect(out).toContain('SBER');
+    expect(out).toContain('TMOS');
+  });
+
+  it('сортирует бары по убыванию стоимости (самая дорогая позиция — сверху)', () => {
+    const out = renderPortfolioChart(view);
+    const lines = out.split('\n').slice(1); // первая строка — заголовок
+    const withValue = view.positions
+      .filter((p) => p.value !== null && p.instrumentType !== 'currency')
+      .sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
+    // Порядок подписей в графике совпадает с сортировкой по стоимости.
+    expect(lines[0]!.startsWith(withValue[0]!.ticker)).toBe(true);
   });
 });
