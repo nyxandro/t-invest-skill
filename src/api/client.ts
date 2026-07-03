@@ -126,7 +126,21 @@ export class TInvestClient {
     if (!response.ok) {
       throw await this.mapHttpError(response, methodPath);
     }
-    return (await response.json()) as T;
+    // Успешный ответ тоже может прийти не-JSON (HTML от прокси/captive portal,
+    // сбой шлюза при TLS-перехвате — см. config.ts): парсинг обязан быть
+    // защищён, иначе сырой SyntaxError уйдёт мимо границы ошибок как APP_UNEXPECTED.
+    try {
+      return (await response.json()) as T;
+    } catch (cause) {
+      throw new AppError({
+        code: 'APP_TINVEST_BAD_RESPONSE',
+        userMessage:
+          'Сервер Т-Инвестиций вернул ответ в неожиданном формате (не JSON). ' +
+          'Возможен перехват трафика прокси или временный сбой шлюза — повторите запрос позже.',
+        details: { method: methodPath, status: response.status },
+        cause,
+      });
+    }
   }
 
   getAccounts(): Promise<GetAccountsResponse> {
@@ -318,6 +332,12 @@ export class TInvestClient {
     }
     const details = { status: response.status, method: methodPath, apiCode, apiMessage };
 
+    // Причина отказа от сервера — единственная действенная деталь при
+    // отклонении заявки (недостаточно средств / неверный шаг цены / лотность).
+    // Без неё агент повторяет мутацию вслепую, поэтому доносим её в сообщение
+    // (в дополнение к details, которые видны лишь при TINVEST_DEBUG).
+    const reason = apiMessage ? ` Причина от сервера: ${apiMessage}.` : '';
+
     if (response.status === 401) {
       return new AppError({
         code: 'APP_TINVEST_UNAUTHORIZED',
@@ -335,7 +355,7 @@ export class TInvestClient {
     if (response.status === 404) {
       return new AppError({
         code: 'APP_TINVEST_NOT_FOUND',
-        userMessage: 'Запрошенные данные не найдены на сервере Т-Инвестиций. Проверьте параметры команды.',
+        userMessage: `Запрошенные данные не найдены на сервере Т-Инвестиций. Проверьте параметры команды.${reason}`,
         details,
       });
     }
@@ -355,7 +375,7 @@ export class TInvestClient {
     }
     return new AppError({
       code: 'APP_TINVEST_REQUEST_FAILED',
-      userMessage: 'Запрос к Т-Инвестициям завершился ошибкой. Проверьте параметры команды и повторите.',
+      userMessage: `Запрос к Т-Инвестициям завершился ошибкой. Проверьте параметры команды и повторите.${reason}`,
       details,
     });
   }

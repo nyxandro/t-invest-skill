@@ -2,11 +2,31 @@
  * Тесты торгового блока: предохранители режимов, сборка запросов заявок
  * (рыночная/лимитная/стоп), предпросмотр и статусы.
  */
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GetAccountsResponse } from '../../api/types.js';
+import type { SessionLock } from '../../config/session.js';
 import { assertMutationAllowed, tradingPathsForMode } from './paths.js';
-import { cancelOrder, placeOrder, previewOrder, type TradingApi } from './orders.js';
+import {
+  cancelOrder,
+  placeOrder,
+  previewOrder,
+  replaceOrder,
+  type TradingApi,
+} from './orders.js';
 import { placeStopOrder } from './stop-orders.js';
+
+// Активный замок full-сессии — обязателен для full-мутаций (церемония
+// --acknowledge-trading). Тесты, где мутация должна пройти, передают его.
+const FULL_LOCK: SessionLock = {
+  mode: 'full',
+  startedAt: '2026-07-02T00:00:00Z',
+  anchor: { pid: 1, startTicks: '1' },
+};
+
+// Мутации печатают ключ идемпотентности в stderr — глушим шум в тестах.
+beforeEach(() => {
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+});
 
 // Мок клиента: собирает вызовы call и отвечает заготовками по пути метода.
 function makeApi(responses: Record<string, unknown> = {}) {
@@ -50,20 +70,33 @@ function makeApi(responses: Record<string, unknown> = {}) {
 
 describe('предохранители торговых команд', () => {
   it('readonly: любая мутация запрещена кодом', () => {
-    expect(() => assertMutationAllowed('readonly', true)).toThrowError(
+    expect(() => assertMutationAllowed('readonly', true, FULL_LOCK)).toThrowError(
       expect.objectContaining({ code: 'APP_TINVEST_TRADING_FORBIDDEN' }),
     );
   });
 
   it('full: мутация без --confirm отклоняется', () => {
-    expect(() => assertMutationAllowed('full', false)).toThrowError(
+    expect(() => assertMutationAllowed('full', false, FULL_LOCK)).toThrowError(
       expect.objectContaining({ code: 'APP_TINVEST_CONFIRM_REQUIRED' }),
     );
-    expect(() => assertMutationAllowed('full', true)).not.toThrow();
+    expect(() => assertMutationAllowed('full', true, FULL_LOCK)).not.toThrow();
   });
 
-  it('sandbox: подтверждение не требуется', () => {
-    expect(() => assertMutationAllowed('sandbox', false)).not.toThrow();
+  it('full: мутация с --confirm, но БЕЗ активной full-сессии отклоняется (K13)', () => {
+    // Церемония --acknowledge-trading не выполнена (нет замка) — торговля
+    // реальными деньгами не должна проходить только по --confirm.
+    expect(() => assertMutationAllowed('full', true, null)).toThrowError(
+      expect.objectContaining({ code: 'APP_TINVEST_FULL_SESSION_REQUIRED' }),
+    );
+    // Замок другого режима тоже не открывает full-мутации.
+    const sandboxLock: SessionLock = { ...FULL_LOCK, mode: 'sandbox' };
+    expect(() => assertMutationAllowed('full', true, sandboxLock)).toThrowError(
+      expect.objectContaining({ code: 'APP_TINVEST_FULL_SESSION_REQUIRED' }),
+    );
+  });
+
+  it('sandbox: подтверждение и сессия не требуются', () => {
+    expect(() => assertMutationAllowed('sandbox', false, null)).not.toThrow();
   });
 
   it('пути методов: sandbox → SandboxService, боевой → OrdersService', () => {
@@ -91,6 +124,7 @@ describe('placeOrder', () => {
       direction: 'buy',
       limitPrice: 300.5,
       confirm: false,
+      sessionLock: null,
     });
     expect(calls[0]?.path).toBe('SandboxService/PostSandboxOrder');
     expect(calls[0]?.body).toMatchObject({
@@ -115,6 +149,7 @@ describe('placeOrder', () => {
       direction: 'sell',
       limitPrice: null,
       confirm: false,
+      sessionLock: null,
     });
     expect(calls[0]?.body).toMatchObject({ orderType: 'ORDER_TYPE_MARKET', direction: 'ORDER_DIRECTION_SELL' });
     expect(calls[0]?.body).not.toHaveProperty('price');
@@ -123,7 +158,7 @@ describe('placeOrder', () => {
   it('readonly отклоняется ДО сетевых вызовов', async () => {
     const { api, calls } = makeApi();
     await expect(
-      placeOrder(api, { mode: 'readonly', query: 'SBER', lots: 1, direction: 'buy', limitPrice: null, confirm: true }),
+      placeOrder(api, { mode: 'readonly', query: 'SBER', lots: 1, direction: 'buy', limitPrice: null, confirm: true, sessionLock: null }),
     ).rejects.toMatchObject({ code: 'APP_TINVEST_TRADING_FORBIDDEN' });
     expect(calls).toEqual([]);
   });
@@ -131,8 +166,16 @@ describe('placeOrder', () => {
   it('full без confirm отклоняется ДО сетевых вызовов', async () => {
     const { api, calls } = makeApi();
     await expect(
-      placeOrder(api, { mode: 'full', query: 'SBER', lots: 1, direction: 'buy', limitPrice: 300, confirm: false }),
+      placeOrder(api, { mode: 'full', query: 'SBER', lots: 1, direction: 'buy', limitPrice: 300, confirm: false, sessionLock: FULL_LOCK }),
     ).rejects.toMatchObject({ code: 'APP_TINVEST_CONFIRM_REQUIRED' });
+    expect(calls).toEqual([]);
+  });
+
+  it('full с confirm, но без full-сессии отклоняется ДО сетевых вызовов (K13)', async () => {
+    const { api, calls } = makeApi();
+    await expect(
+      placeOrder(api, { mode: 'full', query: 'SBER', lots: 1, direction: 'buy', limitPrice: 300, confirm: true, sessionLock: null }),
+    ).rejects.toMatchObject({ code: 'APP_TINVEST_FULL_SESSION_REQUIRED' });
     expect(calls).toEqual([]);
   });
 });
@@ -157,6 +200,7 @@ describe('previewOrder', () => {
       direction: 'buy',
       limitPrice: null,
     });
+    // previewOrder — чтение, sessionLock не требуется.
     expect(view).toMatchObject({
       priceUsed: 300,
       priceSource: 'last-price',
@@ -174,9 +218,9 @@ describe('previewOrder', () => {
 });
 
 describe('cancelOrder / placeStopOrder', () => {
-  it('отмена заявки в full с confirm', async () => {
+  it('отмена заявки в full с confirm и активной full-сессией', async () => {
     const { api, calls } = makeApi({ 'OrdersService/CancelOrder': { time: '2026-07-02T12:00:00Z' } });
-    const result = await cancelOrder(api, { mode: 'full', orderId: 'ord-1', confirm: true });
+    const result = await cancelOrder(api, { mode: 'full', orderId: 'ord-1', confirm: true, sessionLock: FULL_LOCK });
     expect(result.cancelledAt).toBe('2026-07-02T12:00:00Z');
     expect(calls[0]?.body).toMatchObject({ accountId: 'acc-1', orderId: 'ord-1' });
   });
@@ -193,6 +237,7 @@ describe('cancelOrder / placeStopOrder', () => {
         stopPrice: 290,
         limitPrice: null,
         confirm: false,
+        sessionLock: null,
       }),
     ).rejects.toMatchObject({ code: 'APP_CLI_INVALID_ARGUMENT' });
   });
@@ -208,6 +253,7 @@ describe('cancelOrder / placeStopOrder', () => {
       stopPrice: 350,
       limitPrice: null,
       confirm: false,
+      sessionLock: null,
     });
     expect(calls[0]?.body).toMatchObject({
       stopOrderType: 'STOP_ORDER_TYPE_TAKE_PROFIT',
@@ -217,5 +263,52 @@ describe('cancelOrder / placeStopOrder', () => {
       expirationType: 'STOP_ORDER_EXPIRATION_TYPE_GOOD_TILL_CANCEL',
     });
     expect(view.stopOrderId).toBe('stop-1');
+  });
+});
+
+describe('replaceOrder', () => {
+  it('использует переданный --order-id как ключ идемпотентности (K16)', async () => {
+    const { api, calls } = makeApi({ 'SandboxService/ReplaceSandboxOrder': { orderId: 'srv-9' } });
+    await replaceOrder(api, {
+      mode: 'sandbox',
+      orderId: 'ord-1',
+      lots: 2,
+      price: 305,
+      newOrderId: 'my-key-123',
+      confirm: false,
+      sessionLock: null,
+    });
+    // Ключ идемпотентности замены — наш, а не случайный: повтор безопасен.
+    expect(calls[0]?.body).toMatchObject({ orderId: 'ord-1', idempotencyKey: 'my-key-123' });
+  });
+
+  it('направление из ответа без поля direction → null, а не «покупка» (K19)', async () => {
+    // protobuf опускает незаполненный direction: замена sell-заявки не должна
+    // рапортоваться как покупка.
+    const { api } = makeApi({ 'SandboxService/ReplaceSandboxOrder': { orderId: 'srv-9' } });
+    const view = await replaceOrder(api, {
+      mode: 'sandbox',
+      orderId: 'ord-1',
+      lots: 2,
+      price: 305,
+      confirm: false,
+      sessionLock: null,
+    });
+    expect(view.direction).toBeNull();
+  });
+
+  it('направление sell из ответа маппится в sell (K19)', async () => {
+    const { api } = makeApi({
+      'SandboxService/ReplaceSandboxOrder': { orderId: 'srv-9', direction: 'ORDER_DIRECTION_SELL' },
+    });
+    const view = await replaceOrder(api, {
+      mode: 'sandbox',
+      orderId: 'ord-1',
+      lots: 2,
+      price: 305,
+      confirm: false,
+      sessionLock: null,
+    });
+    expect(view.direction).toBe('sell');
   });
 });

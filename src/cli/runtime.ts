@@ -24,7 +24,12 @@ import {
   type TInvestMode,
 } from '../config/config.js';
 import { detectSessionAnchor } from '../config/process-anchor.js';
-import { SESSION_LOCK_DIR, enforceSessionMode, readSessionLock } from '../config/session.js';
+import {
+  SESSION_LOCK_DIR,
+  enforceSessionMode,
+  readSessionLock,
+  type SessionLock,
+} from '../config/session.js';
 
 // Загрузка окружения: .env текущей папки, затем — только если ни один токен
 // ещё не найден — глобальный ~/.config/tinvest/.env (запуск из любой директории).
@@ -56,14 +61,21 @@ export function printErrorAndExit(err: unknown): never {
 // бизнес-функция → вывод. Баннер песочницы уходит в stderr, чтобы не портить --json.
 export async function runCommand(
   cmd: Command,
-  fn: (client: TInvestClient, json: boolean, mode: TInvestMode) => Promise<unknown>,
+  fn: (
+    client: TInvestClient,
+    json: boolean,
+    mode: TInvestMode,
+    sessionLock: SessionLock | null,
+  ) => Promise<unknown>,
 ): Promise<void> {
   try {
     const { json, mode: rawMode } = cmd.optsWithGlobals<{ json?: boolean; mode?: string }>();
     const requestedMode = rawMode ? parseMode(rawMode) : undefined;
     // Кодовая граница режимов: живой замок текущей сессии Claude Code
     // переопределяет и запрещает «чужие» режимы независимо от того,
-    // что попросили у агента.
+    // что попросили у агента. Замок — единый источник состояния сессии:
+    // передаём его команде, чтобы торговые мутации могли требовать активную
+    // full-сессию (см. assertMutationAllowed), а не только --confirm.
     const sessionLock = readSessionLock(SESSION_LOCK_DIR, detectSessionAnchor());
     const explicitMode = enforceSessionMode(sessionLock, requestedMode);
     const { mode, token } = resolveModeAndToken(process.env, explicitMode);
@@ -71,7 +83,7 @@ export async function runCommand(
       console.error('Режим песочницы: счёт и данные виртуальные.');
     }
     const client = new TInvestClient({ token, baseUrl: baseUrlForMode(mode) });
-    const result = await fn(client, Boolean(json), mode);
+    const result = await fn(client, Boolean(json), mode, sessionLock);
     console.log(typeof result === 'string' ? result : JSON.stringify(result, null, 2));
   } catch (err) {
     printErrorAndExit(err);

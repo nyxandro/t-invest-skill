@@ -14,6 +14,8 @@
  * - sessionLockPath(dir, pid) — файл замка для якоря;
  * - readSessionLock(dir, anchor) — активный замок ТЕКУЩЕГО якоря (null, если
  *   нет; PID-reuse отбрасывается; повреждённый файл — явная ошибка);
+ * - isModeConflict(active, mode) — единый предикат «запрошен чужой режим при
+ *   живом замке» (используют и startSession, и регистрация команд);
  * - startSession(dir, anchor, mode, now) — создать замок; смена режима при
  *   живом замке запрещена;
  * - endSession(dir, anchor) — снять замок текущего якоря (ручной сброс);
@@ -89,6 +91,13 @@ export function readSessionLock(dir: string, anchor: ProcessAnchor): SessionLock
   return lock;
 }
 
+// Единый предикат конфликта режима: запрошен режим, отличный от уже
+// зафиксированного живым замком. Один источник правила для startSession и для
+// регистрации команд — чтобы зеркальные проверки не разошлись при доработке.
+export function isModeConflict(active: SessionLock | null, mode: TInvestMode): boolean {
+  return active !== null && active.mode !== mode;
+}
+
 export function startSession(
   dir: string,
   anchor: ProcessAnchor,
@@ -98,11 +107,13 @@ export function startSession(
   const active = readSessionLock(dir, anchor);
 
   // Смена режима внутри живой сессии запрещена — в этом весь смысл замка.
-  if (active && active.mode !== mode) {
+  if (isModeConflict(active, mode)) {
+    // Инвариант: конфликт ⇒ замок существует (active не null), поэтому доступ
+    // к active.mode безопасен (boolean-предикат тип не сужает).
     throw new AppError({
       code: 'APP_TINVEST_SESSION_ACTIVE',
       userMessage:
-        `Сессия уже зафиксирована в режиме «${active.mode}». ` +
+        `Сессия уже зафиксирована в режиме «${active!.mode}». ` +
         'Смена режима — только в новой сессии: закройте текущую сессию Claude Code и откройте новую, ' +
         'режим будет выбран заново.',
     });

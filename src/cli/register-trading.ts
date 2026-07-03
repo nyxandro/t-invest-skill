@@ -76,7 +76,7 @@ function registerPlaceCommand(order: Command, direction: TradeDirection): void {
         opts: { lots: string; price?: string; account?: string; confirm?: boolean; orderId?: string },
         cmd: Command,
       ) =>
-        runCommand(cmd, async (client, json, mode) => {
+        runCommand(cmd, async (client, json, mode, sessionLock) => {
           const view = await placeOrder(client, {
             mode,
             explicitAccountId: opts.account,
@@ -86,6 +86,7 @@ function registerPlaceCommand(order: Command, direction: TradeDirection): void {
             limitPrice: opts.price !== undefined ? parsePositiveNumber(opts.price, '--price') : null,
             orderId: opts.orderId,
             confirm: Boolean(opts.confirm),
+            sessionLock,
           });
           return json ? view : renderPlacedOrder(view);
         }),
@@ -157,12 +158,13 @@ export function registerTradingCommands(program: Command): void {
     .option('-a, --account <id>', 'идентификатор счёта')
     .option('--confirm', 'подтверждение (обязателен в режиме full)')
     .action(async (orderId: string, opts: { account?: string; confirm?: boolean }, cmd: Command) =>
-      runCommand(cmd, async (client, json, mode) => {
+      runCommand(cmd, async (client, json, mode, sessionLock) => {
         const result = await cancelOrder(client, {
           mode,
           explicitAccountId: opts.account,
           orderId,
           confirm: Boolean(opts.confirm),
+          sessionLock,
         });
         return json ? result : `Заявка ${orderId} отменена${result.cancelledAt ? ` (${result.cancelledAt})` : ''}.`;
       }),
@@ -176,20 +178,23 @@ export function registerTradingCommands(program: Command): void {
     .requiredOption('--price <price>', 'новая лимитная цена')
     .option('-a, --account <id>', 'идентификатор счёта')
     .option('--confirm', 'подтверждение (обязателен в режиме full)')
+    .option('--order-id <id>', 'свой ключ идемпотентности замены (для безопасного повтора)')
     .action(
       async (
         orderId: string,
-        opts: { lots: string; price: string; account?: string; confirm?: boolean },
+        opts: { lots: string; price: string; account?: string; confirm?: boolean; orderId?: string },
         cmd: Command,
       ) =>
-        runCommand(cmd, async (client, json, mode) => {
+        runCommand(cmd, async (client, json, mode, sessionLock) => {
           const view = await replaceOrder(client, {
             mode,
             explicitAccountId: opts.account,
             orderId,
             lots: parsePositiveInt(opts.lots, '--lots'),
             price: parsePositiveNumber(opts.price, '--price'),
+            newOrderId: opts.orderId,
             confirm: Boolean(opts.confirm),
+            sessionLock,
           });
           return json ? view : renderPlacedOrder(view);
         }),
@@ -210,6 +215,7 @@ export function registerTradingCommands(program: Command): void {
     .option('--direction <dir>', 'направление: buy | sell', 'sell')
     .option('-a, --account <id>', 'идентификатор счёта')
     .option('--confirm', 'подтверждение (обязателен в режиме full)')
+    .option('--order-id <id>', 'свой ключ идемпотентности (для безопасного повтора)')
     .action(
       async (
         query: string,
@@ -221,10 +227,11 @@ export function registerTradingCommands(program: Command): void {
           direction: string;
           account?: string;
           confirm?: boolean;
+          orderId?: string;
         },
         cmd: Command,
       ) =>
-        runCommand(cmd, async (client, json, mode) => {
+        runCommand(cmd, async (client, json, mode, sessionLock) => {
           const view = await placeStopOrder(client, {
             mode,
             explicitAccountId: opts.account,
@@ -234,7 +241,9 @@ export function registerTradingCommands(program: Command): void {
             direction: parseDirection(opts.direction),
             stopPrice: parsePositiveNumber(opts.stopPrice, '--stop-price'),
             limitPrice: opts.price !== undefined ? parsePositiveNumber(opts.price, '--price') : null,
+            orderId: opts.orderId,
             confirm: Boolean(opts.confirm),
+            sessionLock,
           });
           return json ? view : renderPlacedStopOrder(view);
         }),
@@ -258,12 +267,13 @@ export function registerTradingCommands(program: Command): void {
     .option('-a, --account <id>', 'идентификатор счёта')
     .option('--confirm', 'подтверждение (обязателен в режиме full)')
     .action(async (stopOrderId: string, opts: { account?: string; confirm?: boolean }, cmd: Command) =>
-      runCommand(cmd, async (client, json, mode) => {
+      runCommand(cmd, async (client, json, mode, sessionLock) => {
         const result = await cancelStopOrder(client, {
           mode,
           explicitAccountId: opts.account,
           stopOrderId,
           confirm: Boolean(opts.confirm),
+          sessionLock,
         });
         return json
           ? result

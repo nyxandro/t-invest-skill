@@ -93,10 +93,12 @@ const MAX_ANCESTOR_HOPS = 32;
 
 export function detectSessionAnchor(probe: ProcessProbe = systemProbe): ProcessAnchor {
   // Идём вверх по цепочке предков, запоминая первого (ближайшего) claude.
+  // /proc/<pid>/stat каждого процесса читаем РОВНО ОДИН раз: stat родителя,
+  // прочитанный ради его startTicks, переносим в следующую итерацию.
   let pid = probe.selfPid;
+  let stat = probe.readStat(pid);
   let parentAnchor: ProcessAnchor | null = null; // прямой родитель — fallback
   for (let hop = 0; hop < MAX_ANCESTOR_HOPS; hop += 1) {
-    const stat = probe.readStat(pid);
     if (!stat) {
       break; // нет /proc — выходим на fallback ниже
     }
@@ -104,19 +106,20 @@ export function detectSessionAnchor(probe: ProcessProbe = systemProbe): ProcessA
     if (!parsed || parsed.ppid <= 1) {
       break;
     }
+    // stat родителя читаем единожды: и для startTicks якоря, и как вход
+    // следующей итерации цикла.
+    const parentStat = probe.readStat(parsed.ppid);
+    const parentParsed = parentStat ? parseStat(parentStat) : null;
     const ancestor: ProcessAnchor = {
       pid: parsed.ppid,
-      startTicks: (() => {
-        const parentStat = probe.readStat(parsed.ppid);
-        const parentParsed = parentStat ? parseStat(parentStat) : null;
-        return parentParsed?.startTicks ?? null;
-      })(),
+      startTicks: parentParsed?.startTicks ?? null,
     };
     parentAnchor ??= ancestor;
     if (isClaudeProcess(probe.readCmdline(parsed.ppid))) {
       return ancestor;
     }
     pid = parsed.ppid;
+    stat = parentStat;
   }
   // Claude-предок не найден (ручной запуск из терминала, не-Linux):
   // якорь — прямой родитель; замок умрёт вместе с его шеллом.

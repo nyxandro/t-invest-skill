@@ -11,7 +11,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { AppError } from '../../api/errors.js';
-import { formatAmount, moneyToNumber, numberToQuotation } from '../../api/money.js';
+import { formatAmount, moneyToNumberOrNull, numberToQuotation } from '../../api/money.js';
 import type {
   CancelStopOrderResponse,
   GetStopOrdersResponse,
@@ -21,7 +21,11 @@ import type {
   StopOrderType,
 } from '../../api/types-trading.js';
 import type { TInvestMode } from '../../config/config.js';
+import type { SessionLock } from '../../config/session.js';
 import { renderTable } from '../../format/table.js';
+import { formatMoscowDate } from '../../format/datetime.js';
+import { DASH } from '../../format/values.js';
+import { directionFromApi, directionLabel, stopDirectionToApi } from '../../format/direction.js';
 import { resolveAccountId } from '../resolve-account.js';
 import { assertMutationAllowed, tradingPathsForMode } from './paths.js';
 import { resolveTradeInstrument, type TradeDirection, type TradingApi } from './orders.js';
@@ -55,10 +59,12 @@ export async function placeStopOrder(
     direction: TradeDirection;
     stopPrice: number;
     limitPrice: number | null;
+    orderId?: string; // свой ключ идемпотентности для безопасного повтора
     confirm: boolean;
+    sessionLock: SessionLock | null;
   },
 ): Promise<PlacedStopOrderView> {
-  assertMutationAllowed(params.mode, params.confirm);
+  assertMutationAllowed(params.mode, params.confirm, params.sessionLock);
   // Стоп-лимит без лимитной цены не имеет смысла — явная ошибка до API.
   if (params.kind === 'stop-limit' && params.limitPrice === null) {
     throw new AppError({
@@ -67,20 +73,28 @@ export async function placeStopOrder(
     });
   }
   const paths = tradingPathsForMode(params.mode);
-  const accountId = await resolveAccountId(api, params.explicitAccountId);
-  const instrument = await resolveTradeInstrument(api, params.query);
+  // Резолвы счёта и инструмента независимы — параллелим.
+  const [accountId, instrument] = await Promise.all([
+    resolveAccountId(api, params.explicitAccountId),
+    resolveTradeInstrument(api, params.query),
+  ]);
 
+  const clientOrderId = params.orderId ?? randomUUID();
   const request: PostStopOrderRequest = {
     accountId,
     instrumentId: instrument.uid,
     quantity: String(params.lots),
-    direction: params.direction === 'buy' ? 'STOP_ORDER_DIRECTION_BUY' : 'STOP_ORDER_DIRECTION_SELL',
+    direction: stopDirectionToApi(params.direction),
     stopOrderType: STOP_TYPE_BY_KIND[params.kind],
     expirationType: 'STOP_ORDER_EXPIRATION_TYPE_GOOD_TILL_CANCEL',
     stopPrice: numberToQuotation(params.stopPrice),
     ...(params.limitPrice !== null ? { price: numberToQuotation(params.limitPrice) } : {}),
-    orderId: randomUUID(),
+    orderId: clientOrderId,
   };
+  // Ключ идемпотентности в stderr до отправки — для безопасного повтора (--order-id).
+  console.error(
+    `Ключ идемпотентности стоп-заявки: ${clientOrderId}. Для повтора: --order-id ${clientOrderId}`,
+  );
   const resp = await api.call<PostStopOrderResponse>(paths.postStopOrder, request);
   return {
     stopOrderId: resp.stopOrderId ?? null,
@@ -105,18 +119,16 @@ export interface StopOrderView {
 }
 
 export function toStopOrderView(info: StopOrderInfo): StopOrderView {
+  // Лимитная цена: у тейк-профита/стоп-лосса её нет, приходит нулём — трактуем
+  // ноль как «нет лимита» (в отличие от stopPrice, где ноль был бы данными).
+  const limit = moneyToNumberOrNull(info.price);
   return {
     stopOrderId: info.stopOrderId ?? null,
     ticker: info.figi ?? info.instrumentUid ?? null,
-    direction:
-      info.direction === 'STOP_ORDER_DIRECTION_BUY'
-        ? 'buy'
-        : info.direction === 'STOP_ORDER_DIRECTION_SELL'
-          ? 'sell'
-          : null,
+    direction: directionFromApi(info.direction),
     lots: info.lotsRequested ? Number(info.lotsRequested) : null,
-    stopPrice: info.stopPrice ? moneyToNumber(info.stopPrice) : null,
-    limitPrice: info.price && moneyToNumber(info.price) !== 0 ? moneyToNumber(info.price) : null,
+    stopPrice: moneyToNumberOrNull(info.stopPrice),
+    limitPrice: limit !== null && limit !== 0 ? limit : null,
     createDate: info.createDate ?? null,
     status: info.status ?? null,
   };
@@ -134,9 +146,15 @@ export async function listStopOrders(
 
 export async function cancelStopOrder(
   api: TradingApi,
-  params: { mode: TInvestMode; explicitAccountId?: string; stopOrderId: string; confirm: boolean },
+  params: {
+    mode: TInvestMode;
+    explicitAccountId?: string;
+    stopOrderId: string;
+    confirm: boolean;
+    sessionLock: SessionLock | null;
+  },
 ): Promise<{ cancelledAt: string | null }> {
-  assertMutationAllowed(params.mode, params.confirm);
+  assertMutationAllowed(params.mode, params.confirm, params.sessionLock);
   const paths = tradingPathsForMode(params.mode);
   const accountId = await resolveAccountId(api, params.explicitAccountId);
   const resp = await api.call<CancelStopOrderResponse>(paths.cancelStopOrder, {
@@ -146,8 +164,6 @@ export async function cancelStopOrder(
   return { cancelledAt: resp.time ?? null };
 }
 
-const dash = '—';
-
 export function renderPlacedStopOrder(view: PlacedStopOrderView): string {
   const kindLabels: Record<StopOrderKind, string> = {
     'take-profit': 'тейк-профит',
@@ -155,8 +171,8 @@ export function renderPlacedStopOrder(view: PlacedStopOrderView): string {
     'stop-limit': 'стоп-лимит',
   };
   return [
-    `Стоп-заявка (${kindLabels[view.kind]}) по ${view.ticker} выставлена: ${view.stopOrderId ?? dash}`,
-    `${view.direction === 'buy' ? 'Покупка' : 'Продажа'} ${view.lots} лот(ов) при цене ${formatAmount(view.stopPrice)}` +
+    `Стоп-заявка (${kindLabels[view.kind]}) по ${view.ticker} выставлена: ${view.stopOrderId ?? DASH}`,
+    `${directionLabel(view.direction)} ${view.lots} лот(ов) при цене ${formatAmount(view.stopPrice)}` +
       (view.limitPrice !== null ? `, лимит ${formatAmount(view.limitPrice)}` : ''),
   ].join('\n');
 }
@@ -168,13 +184,14 @@ export function renderStopOrders(views: StopOrderView[]): string {
   return renderTable(
     ['Номер', 'Бумага', 'Напр.', 'Лоты', 'Стоп-цена', 'Лимит', 'Создана'],
     views.map((v) => [
-      v.stopOrderId ?? dash,
-      v.ticker ?? dash,
-      v.direction === 'buy' ? 'покупка' : v.direction === 'sell' ? 'продажа' : dash,
-      v.lots !== null ? String(v.lots) : dash,
-      v.stopPrice !== null ? formatAmount(v.stopPrice) : dash,
-      v.limitPrice !== null ? formatAmount(v.limitPrice) : dash,
-      v.createDate?.slice(0, 10) ?? dash,
+      v.stopOrderId ?? DASH,
+      v.ticker ?? DASH,
+      directionLabel(v.direction),
+      v.lots !== null ? String(v.lots) : DASH,
+      v.stopPrice !== null ? formatAmount(v.stopPrice) : DASH,
+      v.limitPrice !== null ? formatAmount(v.limitPrice) : DASH,
+      // Дата создания — в МСК (createDate приходит в UTC).
+      v.createDate ? formatMoscowDate(v.createDate) : DASH,
     ]),
   );
 }

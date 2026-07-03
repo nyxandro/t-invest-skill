@@ -16,9 +16,9 @@ import { randomUUID } from 'node:crypto';
 import { AppError } from '../../api/errors.js';
 import {
   formatAmount,
-  moneyToNumber,
+  moneyToNumberOrNull,
   numberToQuotation,
-  quotationToNumber,
+  quotationToNumberOrNull,
 } from '../../api/money.js';
 import type { GetLastPricesResponse } from '../../api/types.js';
 import type {
@@ -31,7 +31,16 @@ import type {
   PostOrderResponse,
 } from '../../api/types-trading.js';
 import type { TInvestMode } from '../../config/config.js';
+import type { SessionLock } from '../../config/session.js';
 import { renderTable } from '../../format/table.js';
+import { DASH } from '../../format/values.js';
+import {
+  directionFromApi,
+  directionLabel,
+  directionPhrase,
+  orderDirectionToApi,
+  type TradeDirection,
+} from '../../format/direction.js';
 import { resolveAccountId, type AccountsApi } from '../resolve-account.js';
 import { resolveInstrument, type InstrumentSearchApi } from '../resolve-instrument.js';
 import { assertMutationAllowed, tradingPathsForMode } from './paths.js';
@@ -41,7 +50,18 @@ export interface TradingApi extends AccountsApi, InstrumentSearchApi {
   getLastPrices(instrumentIds: string[]): Promise<GetLastPricesResponse>;
 }
 
-export type TradeDirection = 'buy' | 'sell';
+// Реэкспорт для торговых модулей и регистрации команд (единый тип направления).
+export type { TradeDirection } from '../../format/direction.js';
+
+// Печать ключа идемпотентности в stderr ДО отправки мутации: при обрыве связи
+// или таймауте ключ не теряется вместе с процессом — его можно передать в
+// повтор через --order-id и не задвоить реальную заявку.
+function announceIdempotencyKey(clientOrderId: string): void {
+  console.error(
+    `Ключ идемпотентности заявки: ${clientOrderId}. ` +
+      `Для безопасного повтора той же заявки используйте: --order-id ${clientOrderId}`,
+  );
+}
 
 // Русские подписи статусов исполнения торгового поручения.
 export const ORDER_STATUS_LABELS: Record<string, string> = {
@@ -56,7 +76,7 @@ export interface PlacedOrderView {
   orderId: string | null;
   clientOrderId: string; // ключ идемпотентности, который отправили мы
   ticker: string;
-  direction: TradeDirection;
+  direction: TradeDirection | null; // null, если ответ не сообщил направление
   orderType: 'market' | 'limit';
   statusText: string | null;
   lotsRequested: number | null;
@@ -75,9 +95,12 @@ function orderStatusText(status: string | undefined): string | null {
   return ORDER_STATUS_LABELS[status] ?? status;
 }
 
-// Резолв инструмента для торговли: бумага обязана торговаться через API.
+// Резолв инструмента для торговли: бумага обязана торговаться через API, и
+// запрос обязан однозначно указывать на один инструмент. requireUnambiguous
+// не даёт молча выбрать «первую» бумагу, когда тикер совпал у РАЗНЫХ выпусков
+// на разных площадках — иначе можно купить не то реальными деньгами.
 export async function resolveTradeInstrument(api: TradingApi, query: string) {
-  const instrument = await resolveInstrument(api, query);
+  const instrument = await resolveInstrument(api, query, { requireUnambiguous: true });
   if (instrument.apiTradeAvailableFlag === false) {
     throw new AppError({
       code: 'APP_TINVEST_NOT_TRADABLE',
@@ -89,7 +112,12 @@ export async function resolveTradeInstrument(api: TradingApi, query: string) {
 
 function toPlacedView(
   resp: PostOrderResponse,
-  base: { ticker: string; direction: TradeDirection; orderType: 'market' | 'limit'; clientOrderId: string },
+  base: {
+    ticker: string;
+    direction: TradeDirection | null;
+    orderType: 'market' | 'limit';
+    clientOrderId: string;
+  },
 ): PlacedOrderView {
   return {
     orderId: resp.orderId ?? null,
@@ -100,9 +128,9 @@ function toPlacedView(
     statusText: orderStatusText(resp.executionReportStatus),
     lotsRequested: resp.lotsRequested ? Number(resp.lotsRequested) : null,
     lotsExecuted: resp.lotsExecuted ? Number(resp.lotsExecuted) : null,
-    totalAmount: resp.totalOrderAmount ? moneyToNumber(resp.totalOrderAmount) : null,
-    executedPrice: resp.executedOrderPrice ? moneyToNumber(resp.executedOrderPrice) : null,
-    commission: resp.executedCommission ? moneyToNumber(resp.executedCommission) : null,
+    totalAmount: moneyToNumberOrNull(resp.totalOrderAmount),
+    executedPrice: moneyToNumberOrNull(resp.executedOrderPrice),
+    commission: moneyToNumberOrNull(resp.executedCommission),
     currency: resp.totalOrderAmount?.currency ?? null,
     message: resp.message || null,
   };
@@ -119,13 +147,17 @@ export async function placeOrder(
     limitPrice: number | null; // null — рыночная заявка
     orderId?: string; // свой ключ идемпотентности (для повтора)
     confirm: boolean;
+    sessionLock: SessionLock | null;
   },
 ): Promise<PlacedOrderView> {
-  // Предохранитель ДО любых сетевых вызовов.
-  assertMutationAllowed(params.mode, params.confirm);
+  // Предохранитель ДО любых сетевых вызовов (в full — требует full-сессию).
+  assertMutationAllowed(params.mode, params.confirm, params.sessionLock);
   const paths = tradingPathsForMode(params.mode);
-  const accountId = await resolveAccountId(api, params.explicitAccountId);
-  const instrument = await resolveTradeInstrument(api, params.query);
+  // Резолвы счёта и инструмента независимы — параллелим (экономия round-trip).
+  const [accountId, instrument] = await Promise.all([
+    resolveAccountId(api, params.explicitAccountId),
+    resolveTradeInstrument(api, params.query),
+  ]);
 
   const clientOrderId = params.orderId ?? randomUUID();
   const orderType = params.limitPrice !== null ? 'limit' : 'market';
@@ -133,12 +165,14 @@ export async function placeOrder(
     accountId,
     instrumentId: instrument.uid,
     quantity: String(params.lots),
-    direction: params.direction === 'buy' ? 'ORDER_DIRECTION_BUY' : 'ORDER_DIRECTION_SELL',
+    direction: orderDirectionToApi(params.direction),
     orderType: orderType === 'limit' ? 'ORDER_TYPE_LIMIT' : 'ORDER_TYPE_MARKET',
     orderId: clientOrderId,
     ...(params.limitPrice !== null ? { price: numberToQuotation(params.limitPrice) } : {}),
   };
+  announceIdempotencyKey(clientOrderId);
   const resp = await api.call<PostOrderResponse>(paths.postOrder, request);
+  // Направление известно из запроса пользователя — берём его, а не из ответа.
   return toPlacedView(resp, { ticker: instrument.ticker, direction: params.direction, orderType, clientOrderId });
 }
 
@@ -171,16 +205,21 @@ export async function previewOrder(
 ): Promise<OrderPreviewView> {
   // Предпросмотр — чтение: доступен во всех режимах, включая readonly.
   const paths = tradingPathsForMode(params.mode);
-  const accountId = await resolveAccountId(api, params.explicitAccountId);
-  const instrument = await resolveTradeInstrument(api, params.query);
+  // Резолвы счёта и инструмента независимы — параллелим.
+  const [accountId, instrument] = await Promise.all([
+    resolveAccountId(api, params.explicitAccountId),
+    resolveTradeInstrument(api, params.query),
+  ]);
 
   // Цена для оценки: лимитная, иначе последняя рыночная (честно помечаем источник).
   let priceUsed = params.limitPrice;
   let priceSource: 'limit' | 'last-price' = 'limit';
   if (priceUsed === null) {
     const { lastPrices } = await api.getLastPrices([instrument.uid]);
+    // Ловушка API: у бумаги без торгов запись приходит БЕЗ поля price —
+    // нормализуем через *OrNull (0 остался бы «настоящей» ценой при `?.price`).
     const last = lastPrices.find((p) => p.instrumentUid === instrument.uid)?.price;
-    priceUsed = last ? quotationToNumber(last) : null;
+    priceUsed = quotationToNumberOrNull(last);
     priceSource = 'last-price';
   }
 
@@ -199,11 +238,11 @@ export async function previewOrder(
       accountId,
       instrumentId: instrument.uid,
       price: numberToQuotation(priceUsed),
-      direction: params.direction === 'buy' ? 'ORDER_DIRECTION_BUY' : 'ORDER_DIRECTION_SELL',
+      direction: orderDirectionToApi(params.direction),
       quantity: String(params.lots),
     });
-    estimatedAmount = price.totalOrderAmount ? moneyToNumber(price.totalOrderAmount) : null;
-    commission = price.executedCommission ? moneyToNumber(price.executedCommission) : null;
+    estimatedAmount = moneyToNumberOrNull(price.totalOrderAmount);
+    commission = moneyToNumberOrNull(price.executedCommission);
     currency = price.totalOrderAmount?.currency ?? currency;
   }
 
@@ -220,9 +259,7 @@ export async function previewOrder(
     currency,
     maxBuyLots: maxLots.buyLimits?.buyMaxLots ? Number(maxLots.buyLimits.buyMaxLots) : null,
     maxSellLots: maxLots.sellLimits?.sellMaxLots ? Number(maxLots.sellLimits.sellMaxLots) : null,
-    availableMoney: maxLots.buyLimits?.buyMoneyAmount
-      ? quotationToNumber(maxLots.buyLimits.buyMoneyAmount)
-      : null,
+    availableMoney: quotationToNumberOrNull(maxLots.buyLimits?.buyMoneyAmount),
   };
 }
 
@@ -243,17 +280,12 @@ export function toOrderStateView(order: OrderState): OrderStateView {
   return {
     orderId: order.orderId ?? null,
     ticker: order.ticker ?? order.figi ?? null,
-    direction:
-      order.direction === 'ORDER_DIRECTION_BUY'
-        ? 'buy'
-        : order.direction === 'ORDER_DIRECTION_SELL'
-          ? 'sell'
-          : null,
+    direction: directionFromApi(order.direction),
     statusText: orderStatusText(order.executionReportStatus),
     lotsRequested: order.lotsRequested ? Number(order.lotsRequested) : null,
     lotsExecuted: order.lotsExecuted ? Number(order.lotsExecuted) : null,
-    initialPrice: order.initialSecurityPrice ? moneyToNumber(order.initialSecurityPrice) : null,
-    totalAmount: order.totalOrderAmount ? moneyToNumber(order.totalOrderAmount) : null,
+    initialPrice: moneyToNumberOrNull(order.initialSecurityPrice),
+    totalAmount: moneyToNumberOrNull(order.totalOrderAmount),
     currency: order.totalOrderAmount?.currency ?? null,
     orderDate: order.orderDate ?? null,
   };
@@ -284,9 +316,15 @@ export async function orderStatus(
 
 export async function cancelOrder(
   api: TradingApi,
-  params: { mode: TInvestMode; explicitAccountId?: string; orderId: string; confirm: boolean },
+  params: {
+    mode: TInvestMode;
+    explicitAccountId?: string;
+    orderId: string;
+    confirm: boolean;
+    sessionLock: SessionLock | null;
+  },
 ): Promise<{ cancelledAt: string | null }> {
-  assertMutationAllowed(params.mode, params.confirm);
+  assertMutationAllowed(params.mode, params.confirm, params.sessionLock);
   const paths = tradingPathsForMode(params.mode);
   const accountId = await resolveAccountId(api, params.explicitAccountId);
   const resp = await api.call<CancelOrderResponse>(paths.cancelOrder, {
@@ -304,13 +342,19 @@ export async function replaceOrder(
     orderId: string;
     lots: number;
     price: number;
+    newOrderId?: string; // свой ключ идемпотентности для повтора замены
     confirm: boolean;
+    sessionLock: SessionLock | null;
   },
 ): Promise<PlacedOrderView> {
-  assertMutationAllowed(params.mode, params.confirm);
+  assertMutationAllowed(params.mode, params.confirm, params.sessionLock);
   const paths = tradingPathsForMode(params.mode);
   const accountId = await resolveAccountId(api, params.explicitAccountId);
-  const idempotencyKey = randomUUID();
+  // Ключ идемпотентности замены: свой (для безопасного повтора при таймауте)
+  // или сгенерированный. Раньше он всегда был случайным — повтор замены
+  // отправлял новый ключ, и API не мог сопоставить его с первым запросом.
+  const idempotencyKey = params.newOrderId ?? randomUUID();
+  announceIdempotencyKey(idempotencyKey);
   const resp = await api.call<PostOrderResponse>(paths.replaceOrder, {
     accountId,
     orderId: params.orderId,
@@ -320,7 +364,8 @@ export async function replaceOrder(
   });
   return toPlacedView(resp, {
     ticker: resp.figi ?? params.orderId,
-    direction: resp.direction === 'ORDER_DIRECTION_SELL' ? 'sell' : 'buy',
+    // Направление берём из ответа; при отсутствии поля — null, не «покупка».
+    direction: directionFromApi(resp.direction),
     orderType: 'limit',
     clientOrderId: idempotencyKey,
   });
@@ -328,13 +373,17 @@ export async function replaceOrder(
 
 // --- Рендеры ---
 
-const dash = '—';
+// Заголовок заявки: направление может быть неизвестно (null) — тогда фразу о
+// направлении опускаем, а не подставляем «покупку».
+function placedHeaderDirection(direction: TradeDirection | null): string {
+  return direction ? `${directionPhrase(direction)} ` : '';
+}
 
 export function renderPlacedOrder(view: PlacedOrderView): string {
   const lines = [
-    `Заявка ${view.direction === 'buy' ? 'на покупку' : 'на продажу'} ${view.ticker} (${view.orderType === 'limit' ? 'лимитная' : 'рыночная'}): ${view.statusText ?? dash}`,
-    `Номер: ${view.orderId ?? dash} | лотов: ${view.lotsExecuted ?? 0}/${view.lotsRequested ?? dash}`,
-    `Сумма: ${view.totalAmount !== null ? `${formatAmount(view.totalAmount)} ${view.currency?.toUpperCase() ?? ''}` : dash}` +
+    `Заявка ${placedHeaderDirection(view.direction)}${view.ticker} (${view.orderType === 'limit' ? 'лимитная' : 'рыночная'}): ${view.statusText ?? DASH}`,
+    `Номер: ${view.orderId ?? DASH} | ключ идемпотентности: ${view.clientOrderId} | лотов: ${view.lotsExecuted ?? 0}/${view.lotsRequested ?? DASH}`,
+    `Сумма: ${view.totalAmount !== null ? `${formatAmount(view.totalAmount)} ${view.currency?.toUpperCase() ?? ''}` : DASH}` +
       (view.commission !== null ? ` | комиссия: ${formatAmount(view.commission)}` : ''),
   ];
   if (view.message) {
@@ -345,12 +394,12 @@ export function renderPlacedOrder(view: PlacedOrderView): string {
 
 export function renderOrderPreview(view: OrderPreviewView): string {
   return [
-    `Предпросмотр: ${view.direction === 'buy' ? 'покупка' : 'продажа'} ${view.ticker} (${view.name}), лотов: ${view.lots}` +
+    `Предпросмотр: ${directionLabel(view.direction)} ${view.ticker} (${view.name}), лотов: ${view.lots}` +
       (view.lotSize !== null ? ` (в лоте ${view.lotSize} шт.)` : ''),
-    `Цена для оценки: ${view.priceUsed !== null ? formatAmount(view.priceUsed) : dash} (${view.priceSource === 'limit' ? 'лимитная' : 'последняя рыночная'})`,
-    `Оценка суммы: ${view.estimatedAmount !== null ? `${formatAmount(view.estimatedAmount)} ${view.currency?.toUpperCase() ?? ''}` : dash}` +
+    `Цена для оценки: ${view.priceUsed !== null ? formatAmount(view.priceUsed) : DASH} (${view.priceSource === 'limit' ? 'лимитная' : 'последняя рыночная'})`,
+    `Оценка суммы: ${view.estimatedAmount !== null ? `${formatAmount(view.estimatedAmount)} ${view.currency?.toUpperCase() ?? ''}` : DASH}` +
       (view.commission !== null ? ` | комиссия: ${formatAmount(view.commission)}` : ''),
-    `Доступно: покупка до ${view.maxBuyLots ?? dash} лотов | продажа до ${view.maxSellLots ?? dash} лотов` +
+    `Доступно: покупка до ${view.maxBuyLots ?? DASH} лотов | продажа до ${view.maxSellLots ?? DASH} лотов` +
       (view.availableMoney !== null ? ` | свободно ${formatAmount(view.availableMoney)}` : ''),
   ].join('\n');
 }
@@ -362,21 +411,21 @@ export function renderOrders(views: OrderStateView[]): string {
   return renderTable(
     ['Номер', 'Тикер', 'Напр.', 'Статус', 'Лоты', 'Цена', 'Сумма'],
     views.map((v) => [
-      v.orderId ?? dash,
-      v.ticker ?? dash,
-      v.direction === 'buy' ? 'покупка' : v.direction === 'sell' ? 'продажа' : dash,
-      v.statusText ?? dash,
-      `${v.lotsExecuted ?? 0}/${v.lotsRequested ?? dash}`,
-      v.initialPrice !== null ? formatAmount(v.initialPrice) : dash,
-      v.totalAmount !== null ? formatAmount(v.totalAmount) : dash,
+      v.orderId ?? DASH,
+      v.ticker ?? DASH,
+      directionLabel(v.direction),
+      v.statusText ?? DASH,
+      `${v.lotsExecuted ?? 0}/${v.lotsRequested ?? DASH}`,
+      v.initialPrice !== null ? formatAmount(v.initialPrice) : DASH,
+      v.totalAmount !== null ? formatAmount(v.totalAmount) : DASH,
     ]),
   );
 }
 
 export function renderOrderState(view: OrderStateView): string {
   return [
-    `Заявка ${view.orderId ?? dash}: ${view.statusText ?? dash}`,
-    `${view.ticker ?? dash} | ${view.direction === 'buy' ? 'покупка' : view.direction === 'sell' ? 'продажа' : dash} | лотов ${view.lotsExecuted ?? 0}/${view.lotsRequested ?? dash}`,
-    `Цена: ${view.initialPrice !== null ? formatAmount(view.initialPrice) : dash} | сумма: ${view.totalAmount !== null ? formatAmount(view.totalAmount) : dash}`,
+    `Заявка ${view.orderId ?? DASH}: ${view.statusText ?? DASH}`,
+    `${view.ticker ?? DASH} | ${directionLabel(view.direction)} | лотов ${view.lotsExecuted ?? 0}/${view.lotsRequested ?? DASH}`,
+    `Цена: ${view.initialPrice !== null ? formatAmount(view.initialPrice) : DASH} | сумма: ${view.totalAmount !== null ? formatAmount(view.totalAmount) : DASH}`,
   ].join('\n');
 }

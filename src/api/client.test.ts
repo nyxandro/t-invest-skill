@@ -151,4 +151,27 @@ describe('TInvestClient — маппинг ошибок', () => {
     expect(err).toBeInstanceOf(AppError);
     expect((err as AppError).code).toBe('APP_TINVEST_NETWORK');
   });
+
+  it('не-JSON тело при успешном 200 → APP_TINVEST_BAD_RESPONSE, не сырой SyntaxError (K11)', async () => {
+    // Прокси/captive portal/TLS-перехват может вернуть HTTP 200 с HTML.
+    const fetchFn = vi.fn(async () => new Response('<html>portal</html>', { status: 200 }));
+    const client = makeClient(fetchFn as unknown as typeof fetch);
+
+    const err = await client.getAccounts().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AppError);
+    expect((err as AppError).code).toBe('APP_TINVEST_BAD_RESPONSE');
+  });
+
+  it('4xx с сообщением сервера доносит причину отказа в userMessage (K48)', async () => {
+    // Отказ брокера (например, недостаточно средств) должен быть виден без DEBUG.
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({ code: 30042, message: 'недостаточно средств для сделки' }, 400),
+    );
+    const client = makeClient(fetchFn as unknown as typeof fetch);
+
+    const err = await client.call('OrdersService/PostOrder', {}).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AppError);
+    expect((err as AppError).code).toBe('APP_TINVEST_REQUEST_FAILED');
+    expect((err as AppError).userMessage).toContain('недостаточно средств');
+  });
 });

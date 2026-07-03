@@ -5,16 +5,19 @@
  * - readonly: чтение заявок разрешено, ЛЮБАЯ мутация запрещена кодом
  *   (APP_TINVEST_TRADING_FORBIDDEN) — ещё до обращения к API;
  * - full: каждая мутация требует явного флага --confirm
- *   (APP_TINVEST_CONFIRM_REQUIRED) — агент обязан спросить пользователя;
+ *   (APP_TINVEST_CONFIRM_REQUIRED) И активной full-сессии, зафиксированной с
+ *   подтверждением (APP_TINVEST_FULL_SESSION_REQUIRED) — иначе торговля
+ *   реальными деньгами обошла бы церемонию осознанного выбора режима;
  * - sandbox: свободная торговля виртуальными деньгами через SandboxService.
  *
  * Экспорты:
  * - TradingPaths — таблица путей методов для режима;
  * - tradingPathsForMode(mode) — выбор контура (sandbox ↔ боевой);
- * - assertMutationAllowed(mode, confirmed) — предохранитель мутаций.
+ * - assertMutationAllowed(mode, confirmed, sessionLock) — предохранитель мутаций.
  */
 import { AppError } from '../../api/errors.js';
 import type { TInvestMode } from '../../config/config.js';
+import type { SessionLock } from '../../config/session.js';
 
 export interface TradingPaths {
   postOrder: string;
@@ -61,7 +64,16 @@ export function tradingPathsForMode(mode: TInvestMode): TradingPaths {
   return mode === 'sandbox' ? SANDBOX_PATHS : REAL_PATHS;
 }
 
-export function assertMutationAllowed(mode: TInvestMode, confirmed: boolean): void {
+// sessionLock — активный замок текущей сессии (или null). Для full-мутаций он
+// обязателен: церемония --acknowledge-trading при «session start» — это и есть
+// осознанное подтверждение доступа к реальным деньгам. Без активной full-сессии
+// full-мутация запрещена, даже если передан --confirm (иначе пользователь с
+// единственным full-токеном торговал бы реальными деньгами вообще без церемонии).
+export function assertMutationAllowed(
+  mode: TInvestMode,
+  confirmed: boolean,
+  sessionLock: SessionLock | null,
+): void {
   if (mode === 'readonly') {
     throw new AppError({
       code: 'APP_TINVEST_TRADING_FORBIDDEN',
@@ -70,12 +82,22 @@ export function assertMutationAllowed(mode: TInvestMode, confirmed: boolean): vo
         'Для тренировки используйте песочницу (sandbox), для реальной торговли — режим full в новой сессии.',
     });
   }
-  if (mode === 'full' && !confirmed) {
-    throw new AppError({
-      code: 'APP_TINVEST_CONFIRM_REQUIRED',
-      userMessage:
-        'Режим full — торговля реальными деньгами: повторите команду с флагом --confirm ' +
-        'после явного подтверждения пользователя.',
-    });
+  if (mode === 'full') {
+    if (!confirmed) {
+      throw new AppError({
+        code: 'APP_TINVEST_CONFIRM_REQUIRED',
+        userMessage:
+          'Режим full — торговля реальными деньгами: повторите команду с флагом --confirm ' +
+          'после явного подтверждения пользователя.',
+      });
+    }
+    if (!sessionLock || sessionLock.mode !== 'full') {
+      throw new AppError({
+        code: 'APP_TINVEST_FULL_SESSION_REQUIRED',
+        userMessage:
+          'Торговля реальными деньгами требует активной сессии режима full, зафиксированной с ' +
+          'подтверждением: сначала выполните «session start --acknowledge-trading», затем повторите заявку.',
+      });
+    }
   }
 }

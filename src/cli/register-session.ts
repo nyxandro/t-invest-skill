@@ -24,6 +24,7 @@ import {
   SESSION_LOCK_DIR,
   assertFullAcknowledged,
   endSession,
+  isModeConflict,
   readSessionLock,
   startSession,
   sweepDeadSessions,
@@ -62,7 +63,10 @@ export function registerSessionCommands(program: Command): void {
         const anchor = detectSessionAnchor();
         const now = new Date();
         const active = readSessionLock(SESSION_LOCK_DIR, anchor);
-        if (!active || active.mode === mode) {
+        // Нет конфликта режима — проверяем токен (fail-fast) до записи замка.
+        // При конфликте токен не трогаем: startSession выдаст главное сообщение
+        // APP_TINVEST_SESSION_ACTIVE (единый предикат isModeConflict — там же).
+        if (!isModeConflict(active, mode)) {
           resolveModeAndToken(process.env, mode);
         }
         const lock = startSession(SESSION_LOCK_DIR, anchor, mode, now);
