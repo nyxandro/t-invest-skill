@@ -91,7 +91,7 @@ export async function fetchAllOperationItems(
 
 export function buildOperationViews(items: OperationItem[]): OperationView[] {
   return [...items]
-    // Свежие операции сверху — так удобнее и человеку, и консультанту.
+    // Свежие операции сверху — так удобнее и человеку, и агенту.
     .sort((a, b) => Date.parse(b.date) - Date.parse(a.date))
     .map((op): OperationView => ({
       id: op.id,

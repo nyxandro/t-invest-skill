@@ -34,7 +34,7 @@ const program = new Command();
 program
   .name('tinvest')
   .description('CLI для Т-Инвестиций (T-Invest API): портфель, котировки, поиск, операции')
-  .version('0.1.0')
+  .version('1.0.0')
   .option('--json', 'вывод в формате JSON (для интеграций и скилла)')
   .option(
     '-m, --mode <mode>',
