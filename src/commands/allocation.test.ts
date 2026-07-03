@@ -56,6 +56,33 @@ describe('buildAllocationView', () => {
     expect(view.byCountry).toEqual([{ key: 'Россия', value: 10000, weightPercent: 100 }]);
     // GAZP 40% и RU000A1 40% — выше порога 20%, YDEX 20% — ровно на пороге.
     expect(view.concentration.map((c) => c.ticker)).toEqual(['GAZP', 'RU000A1', 'YDEX']);
+    // Чисто рублёвый портфель не должен ложно помечаться мультивалютным.
+    expect(view.warnings.some((w) => w.includes('мультивалют'))).toBe(false);
+  });
+
+  it('мультивалютный портфель: инвалютная позиция даёт предупреждение о неточных весах', () => {
+    // Рублёвая позиция и позиция в USD (замещающая облигация / ГДР). totalValue
+    // приходит в рублях, а стоимость USD-позиции считается в долларах — курса
+    // пересчёта в ответе GetPortfolio нет, поэтому её вес занижен. K5: движок
+    // обязан явно предупредить о мультивалютности, а не выдавать неверный вес.
+    const positions = [
+      position({ instrumentUid: 'u-rub', ticker: 'SBER', quantity: { units: '60', nano: 0 } }),
+      position({
+        instrumentUid: 'u-usd',
+        ticker: 'RU000USDBOND',
+        instrumentType: 'bond',
+        quantity: { units: '10', nano: 0 },
+        currentPrice: { currency: 'usd', units: '100', nano: 0 },
+      }),
+    ];
+    const view = buildAllocationView({
+      accountId: 'acc-1',
+      positions,
+      detailsByUid: new Map(),
+      totalValue: 100000,
+      currency: 'rub',
+    });
+    expect(view.warnings.some((w) => w.includes('мультивалют') && w.includes('USD'))).toBe(true);
   });
 
   it('позиция без текущей цены не учитывается и даёт предупреждение', () => {

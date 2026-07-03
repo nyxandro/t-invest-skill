@@ -9,9 +9,20 @@
  *   обогащение позиций полными названиями инструментов + сборка;
  * - renderPortfolio(view) — человекочитаемый вывод (сводка + таблица).
  */
-import { formatAmount, formatSigned, moneyToNumber, quotationToNumber } from '../api/money.js';
+import {
+  formatAmount,
+  formatSigned,
+  moneyToNumber,
+  moneyToNumberOrNull,
+  quotationToNumber,
+  quotationToNumberOrNull,
+  round,
+} from '../api/money.js';
 import type { GetInstrumentByResponse, PortfolioResponse } from '../api/types.js';
+import { BATCH_CONCURRENCY, BATCH_MIN_INTERVAL_MS } from '../config/config.js';
 import { renderTable, truncate } from '../format/table.js';
+import { DASH, moneyOrDash } from '../format/values.js';
+import { mapWithConcurrency } from '../util/concurrency.js';
 import { resolveAccountId, type AccountsApi } from './resolve-account.js';
 
 export interface PortfolioApi extends AccountsApi {
@@ -45,14 +56,9 @@ export interface PortfolioView {
   accountId: string;
   currency: string;
   totals: PortfolioTotals;
-  expectedYieldPercent: number;
+  expectedYieldPercent: number | null; // null — шлюз опустил поле (нулевая доходность)
   dailyYield: number | null;
   positions: PortfolioPositionView[];
-}
-
-// Округление производных величин до копеек — только для представления.
-function round2(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 export function buildPortfolioView(
@@ -61,19 +67,20 @@ export function buildPortfolioView(
 ): PortfolioView {
   const positions = resp.positions.map((p): PortfolioPositionView => {
     const quantity = quotationToNumber(p.quantity);
-    const averagePrice = p.averagePositionPrice ? moneyToNumber(p.averagePositionPrice) : null;
-    const currentPrice = p.currentPrice ? moneyToNumber(p.currentPrice) : null;
+    // Опущенные protobuf-JSON message-поля → null (цены/НКД может не быть).
+    const averagePrice = moneyToNumberOrNull(p.averagePositionPrice);
+    const currentPrice = moneyToNumberOrNull(p.currentPrice);
 
     // P/L считаем сами из цен (детерминированно и проверяемо), а не берём
     // expectedYield из API: у API считается по FIFO и может отличаться.
     // Без средней цены P/L не выдумываем — null, а не 0.
     const pnl =
       averagePrice !== null && currentPrice !== null
-        ? round2((currentPrice - averagePrice) * quantity)
+        ? round((currentPrice - averagePrice) * quantity)
         : null;
     const pnlPercent =
       averagePrice !== null && averagePrice !== 0 && currentPrice !== null
-        ? round2((currentPrice / averagePrice - 1) * 100)
+        ? round((currentPrice / averagePrice - 1) * 100)
         : null;
 
     return {
@@ -83,11 +90,11 @@ export function buildPortfolioView(
       quantity,
       averagePrice,
       currentPrice,
-      value: currentPrice !== null ? round2(currentPrice * quantity) : null,
+      value: currentPrice !== null ? round(currentPrice * quantity) : null,
       pnl,
       pnlPercent,
-      nkdPerUnit: p.currentNkd ? moneyToNumber(p.currentNkd) : null,
-      dailyYield: p.dailyYield ? moneyToNumber(p.dailyYield) : null,
+      nkdPerUnit: moneyToNumberOrNull(p.currentNkd),
+      dailyYield: moneyToNumberOrNull(p.dailyYield),
     };
   });
 
@@ -101,8 +108,10 @@ export function buildPortfolioView(
       etf: moneyToNumber(resp.totalAmountEtf),
       currencies: moneyToNumber(resp.totalAmountCurrencies),
     },
-    expectedYieldPercent: quotationToNumber(resp.expectedYield),
-    dailyYield: resp.dailyYield ? moneyToNumber(resp.dailyYield) : null,
+    // expectedYield — message-поле Quotation: при нулевой доходности шлюз его
+    // опускает (та же ловушка, что с price/time), поэтому нормализуем в null.
+    expectedYieldPercent: quotationToNumberOrNull(resp.expectedYield),
+    dailyYield: moneyToNumberOrNull(resp.dailyYield),
     positions,
   };
 }
@@ -117,8 +126,16 @@ async function loadInstrumentNames(
   uids: string[],
 ): Promise<Map<string, string>> {
   const unique = [...new Set(uids)];
-  const entries = await Promise.all(
-    unique.map(async (uid): Promise<readonly [string, string] | null> => {
+  // Троттлинг батча: на большом портфеле неограниченный Promise.all даёт залп
+  // унарных GetInstrumentBy и упирается в лимиты API (429). Грузим с пулом
+  // воркеров и минимальным интервалом между стартами (как income). Имя —
+  // презентационное поле, поэтому сбой ОДНОЙ карточки деградирует в null
+  // (не денежные данные) и не роняет портфель; но залп без троттлинга недопустим.
+  const throttle = { concurrency: BATCH_CONCURRENCY, minIntervalMs: BATCH_MIN_INTERVAL_MS };
+  const entries = await mapWithConcurrency(
+    unique,
+    throttle,
+    async (uid): Promise<readonly [string, string] | null> => {
       try {
         const { instrument } = await api.getInstrumentByUid(uid);
         return [uid, instrument.name] as const;
@@ -128,7 +145,7 @@ async function loadInstrumentNames(
         );
         return null;
       }
-    }),
+    },
   );
   return new Map(entries.filter((e): e is readonly [string, string] => e !== null));
 }
@@ -141,12 +158,11 @@ export async function fetchPortfolio(api: PortfolioApi, explicitAccountId?: stri
 }
 
 export function renderPortfolio(view: PortfolioView): string {
-  // Сводка по портфелю + таблица позиций; «—» — данных нет (не ноль).
-  const dash = '—';
+  // Сводка по портфелю + таблица позиций; DASH — данных нет (не ноль).
   const header = [
     `Счёт: ${view.accountId}`,
     `Стоимость портфеля: ${formatAmount(view.totals.portfolio)} ${view.currency.toUpperCase()}`,
-    `Доходность портфеля: ${formatSigned(view.expectedYieldPercent)} %`,
+    `Доходность портфеля: ${view.expectedYieldPercent !== null ? `${formatSigned(view.expectedYieldPercent)} %` : DASH}`,
     view.dailyYield !== null ? `Изменение за день: ${formatSigned(view.dailyYield)}` : '',
     '',
   ]
@@ -157,14 +173,15 @@ export function renderPortfolio(view: PortfolioView): string {
     ['Тикер', 'Название', 'Тип', 'Кол-во', 'Средняя', 'Текущая', 'Стоимость', 'P/L', 'P/L %'],
     view.positions.map((p) => [
       p.ticker,
-      p.name !== null ? truncate(p.name, 28) : dash,
+      p.name !== null ? truncate(p.name, 28) : DASH,
       p.instrumentType,
       formatAmount(p.quantity, 0),
-      p.averagePrice !== null ? formatAmount(p.averagePrice) : dash,
-      p.currentPrice !== null ? formatAmount(p.currentPrice) : dash,
-      p.value !== null ? formatAmount(p.value) : dash,
-      p.pnl !== null ? formatSigned(p.pnl) : dash,
-      p.pnlPercent !== null ? `${formatSigned(p.pnlPercent)} %` : dash,
+      moneyOrDash(p.averagePrice),
+      moneyOrDash(p.currentPrice),
+      moneyOrDash(p.value),
+      // P/L — со знаком «+», поэтому formatSigned, а не moneyOrDash.
+      p.pnl !== null ? formatSigned(p.pnl) : DASH,
+      p.pnlPercent !== null ? `${formatSigned(p.pnlPercent)} %` : DASH,
     ]),
   );
 

@@ -5,7 +5,13 @@
 import { describe, expect, it } from 'vitest';
 import { operationsCursorPage1, operationsCursorPage2 } from '../api/mocks/operations.fixture.js';
 import type { GetOperationsByCursorResponse } from '../api/types.js';
-import { buildOperationViews, computeOperationsRange, fetchAllOperationItems } from './operations.js';
+import {
+  buildOperationViews,
+  computeOperationsRange,
+  fetchAllOperationItems,
+  renderOperations,
+  type OperationView,
+} from './operations.js';
 
 describe('computeOperationsRange', () => {
   it('строит период [now - days; now] в ISO-формате', () => {
@@ -75,5 +81,39 @@ describe('buildOperationViews', () => {
     expect(input?.instrumentName).toBeNull();
     expect(input?.ticker).toBeNull();
     expect(input?.figi).toBeNull();
+  });
+});
+
+describe('renderOperations (K8: время операции в МСК)', () => {
+  // Ночная сделка: 22:30 UTC = 01:30 МСК СЛЕДУЮЩЕГО календарного дня —
+  // при наивном срезе UTC печаталась бы вчерашняя дата и время на 3ч раньше.
+  const nightOperation: OperationView = {
+    id: 'op-night',
+    date: '2026-07-02T22:30:00Z',
+    description: 'Покупка облигации',
+    operationType: 'OPERATION_TYPE_BUY',
+    instrumentName: 'ОФЗ',
+    ticker: 'SU26240',
+    payment: -1000,
+    currency: 'rub',
+    commission: null,
+    figi: 'BBG-ofz',
+    quantity: 1,
+    price: 1000,
+  };
+
+  it('выводит время операции в МСК, сдвигая и время, и календарную дату', () => {
+    const out = renderOperations({
+      accountId: 'acc-1',
+      from: '2026-06-02T21:00:00.000Z', // 2026-06-03 00:00 МСК
+      to: '2026-07-02T21:00:00.000Z', // 2026-07-03 00:00 МСК
+      operations: [nightOperation],
+    });
+
+    // Ячейка времени: дата уехала на 2026-07-03, время 01:30 (МСК), не UTC.
+    expect(out).toContain('2026-07-03 01:30');
+    expect(out).not.toContain('2026-07-02 22:30');
+    // Заголовок периода тоже в МСК (границы сдвинулись на день вперёд).
+    expect(out).toContain('Период: 2026-06-03 — 2026-07-03');
   });
 });

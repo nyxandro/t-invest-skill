@@ -1,13 +1,14 @@
 /**
  * Тесты команды history: выбор интервала под лимиты API, статистика свечей
- * (изменение, диапазон, волатильность), резолв индикативных инструментов.
+ * (изменение, диапазон, волатильность), ранняя валидация периода до сети.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AppError } from '../api/errors.js';
+import { CANDLES_MONTH_MAX_DAYS } from '../config/config.js';
 import {
   computeCandleStats,
+  fetchHistory,
   pickCandleInterval,
-  resolveMarketInstrument,
   toCandleViews,
   type CandleView,
   type HistoryApi,
@@ -91,48 +92,26 @@ describe('toCandleViews', () => {
   });
 });
 
-describe('resolveMarketInstrument', () => {
-  const api = {
-    async findInstrument(query: string) {
-      if (query === 'SBER') {
-        return {
-          instruments: [
-            {
-              uid: 'uid-sber',
-              figi: 'BBG004730N88',
-              ticker: 'SBER',
-              classCode: 'TQBR',
-              instrumentType: 'share',
-              name: 'Сбер Банк',
-            },
-          ],
-        };
-      }
-      return { instruments: [] };
-    },
-    async getIndicatives() {
-      return {
-        instruments: [{ uid: 'uid-imoex', ticker: 'IMOEX', name: 'Индекс МосБиржи' }],
-      };
-    },
-    async getCandles() {
-      return { candles: [] };
-    },
-  } as unknown as HistoryApi;
+describe('fetchHistory (K40)', () => {
+  it('слишком большой --days падает APP_CLI_INVALID_ARGUMENT до любых сетевых вызовов', async () => {
+    // Все методы API — шпионы: если валидация периода уедет после сети, тест
+    // это поймает (какой-то из них окажется вызван).
+    const api = {
+      findInstrument: vi.fn(),
+      getIndicatives: vi.fn(),
+      getCandles: vi.fn(),
+    } as unknown as HistoryApi;
 
-  it('находит обычный инструмент по точному тикеру', async () => {
-    const resolved = await resolveMarketInstrument(api, 'SBER');
-    expect(resolved).toMatchObject({ uid: 'uid-sber', kind: 'instrument' });
-  });
+    const err = await fetchHistory(api, {
+      query: 'SBER',
+      days: CANDLES_MONTH_MAX_DAYS + 1,
+      now: new Date('2026-07-02T00:00:00Z'),
+    }).catch((e: unknown) => e);
 
-  it('падает в индикативные инструменты для индексов', async () => {
-    const resolved = await resolveMarketInstrument(api, 'IMOEX');
-    expect(resolved).toMatchObject({ uid: 'uid-imoex', kind: 'indicative', name: 'Индекс МосБиржи' });
-  });
-
-  it('неизвестный тикер — исходная ошибка «не найден»', async () => {
-    await expect(resolveMarketInstrument(api, 'NOPE')).rejects.toMatchObject({
-      code: 'APP_TINVEST_INSTRUMENT_NOT_FOUND',
-    });
+    expect(err).toBeInstanceOf(AppError);
+    expect((err as AppError).code).toBe('APP_CLI_INVALID_ARGUMENT');
+    expect(api.findInstrument).not.toHaveBeenCalled();
+    expect(api.getIndicatives).not.toHaveBeenCalled();
+    expect(api.getCandles).not.toHaveBeenCalled();
   });
 });

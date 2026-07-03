@@ -16,6 +16,8 @@
  *   к оферте — купон после оферты эмитент может изменить.
  */
 import { moneyToNumber, quotationToNumber } from '../api/money.js';
+import { MS_PER_DAY, MS_PER_YEAR } from '../config/config.js';
+import { DASH, moneyOrDash, percentOrDash } from '../format/values.js';
 import type {
   BondCoupon,
   BondResponse,
@@ -27,6 +29,7 @@ import {
   computeCurrentCouponYieldPercent,
   computeEffectiveYtmPercent,
   computeMacaulayDurationYears,
+  couponAmount,
   type BondCashFlow,
 } from './bond-math.js';
 import { resolveInstrument, type InstrumentSearchApi } from './resolve-instrument.js';
@@ -75,8 +78,6 @@ export interface BondView {
   warnings: string[]; // русские предупреждения для пользователя
 }
 
-// В году 365 дней (ACT/365) — так же, как в bond-math.
-const MS_PER_YEAR = 365 * 24 * 3600 * 1000;
 // Горизонт «годового купона»: 366 дней покрывают високосные смещения дат выплат.
 const ANNUAL_COUPON_WINDOW_DAYS = 366;
 // Окно запроса графика купонов: год назад — чтобы знать последний выплаченный
@@ -84,15 +85,6 @@ const ANNUAL_COUPON_WINDOW_DAYS = 366;
 // (для бессрочных — 30 лет, дальше купоны всё равно не объявлены).
 const COUPON_LOOKBACK_DAYS = 366;
 const COUPON_HORIZON_YEARS = 30;
-
-// Сумма купона; null — выплата ещё не определена (protobuf опускает нули).
-function couponAmount(coupon: BondCoupon): number | null {
-  if (!coupon.payOneBond) {
-    return null;
-  }
-  const value = moneyToNumber(coupon.payOneBond);
-  return value > 0 ? value : null;
-}
 
 function toCouponView(coupon: BondCoupon): BondCouponView {
   return { date: coupon.couponDate, amount: couponAmount(coupon), type: coupon.couponType ?? null };
@@ -106,13 +98,13 @@ function estimateAnnualCoupon(
   quantityPerYear: number | null,
   now: Date,
 ): number | null {
-  const windowEnd = now.getTime() + ANNUAL_COUPON_WINDOW_DAYS * 24 * 3600 * 1000;
+  const windowEnd = now.getTime() + ANNUAL_COUPON_WINDOW_DAYS * MS_PER_DAY;
   const withinYear = future.filter((c) => new Date(c.couponDate).getTime() <= windowEnd);
   if (withinYear.length > 0 && withinYear.every((c) => couponAmount(c) !== null)) {
     return withinYear.reduce((sum, c) => sum + (couponAmount(c) ?? 0), 0);
   }
   // Будущие выплаты неизвестны (флоатер): берём последний известный купон.
-  const reference = [...future].reverse().find((c) => couponAmount(c) !== null) ?? lastKnown;
+  const reference = future.findLast((c) => couponAmount(c) !== null) ?? lastKnown;
   const referenceAmount = reference ? couponAmount(reference) : null;
   if (referenceAmount !== null && quantityPerYear !== null && quantityPerYear > 0) {
     return referenceAmount * quantityPerYear;
@@ -129,9 +121,9 @@ export async function fetchBond(api: BondApi, query: string, now: Date): Promise
     api.getBondBy(resolved.uid),
     api.getLastPrices([resolved.uid]),
   ]);
-  const couponsFrom = new Date(now.getTime() - COUPON_LOOKBACK_DAYS * 24 * 3600 * 1000);
+  const couponsFrom = new Date(now.getTime() - COUPON_LOOKBACK_DAYS * MS_PER_DAY);
   const couponsTo = bond.maturityDate
-    ? new Date(new Date(bond.maturityDate).getTime() + 24 * 3600 * 1000)
+    ? new Date(new Date(bond.maturityDate).getTime() + MS_PER_DAY)
     : new Date(now.getTime() + COUPON_HORIZON_YEARS * MS_PER_YEAR);
   const couponsResponse = await api.getBondCoupons(
     resolved.uid,
@@ -159,9 +151,9 @@ export async function fetchBond(api: BondApi, query: string, now: Date): Promise
     (a, b) => new Date(a.couponDate).getTime() - new Date(b.couponDate).getTime(),
   );
   const futureCoupons = allCoupons.filter((c) => new Date(c.couponDate).getTime() > now.getTime());
-  const lastKnownPast = [...allCoupons]
-    .reverse()
-    .find((c) => new Date(c.couponDate).getTime() <= now.getTime() && couponAmount(c) !== null);
+  const lastKnownPast = allCoupons.findLast(
+    (c) => new Date(c.couponDate).getTime() <= now.getTime() && couponAmount(c) !== null,
+  );
 
   const quantityPerYear = bond.couponQuantityPerYear ?? null;
   const annualCouponRub = estimateAnnualCoupon(futureCoupons, lastKnownPast, quantityPerYear, now);
@@ -195,9 +187,16 @@ export async function fetchBond(api: BondApi, query: string, now: Date): Promise
     warnings.push('Биржа относит выпуск к высокому уровню риска.');
   }
 
-  // Доходность к погашению: только при полном наборе честных данных —
-  // цена, номинал, дата погашения и все будущие купоны определены.
-  const allFutureKnown = futureCoupons.length > 0 && futureCoupons.every((c) => couponAmount(c) !== null);
+  // Доходность к погашению: считается при полном наборе честных данных —
+  // цена, номинал, дата погашения. Неполноту купонов различаем на два случая:
+  //  - купоны есть, но часть не объявлена (payOneBond опущен) — флоатер/выпуск
+  //    с ещё не установленной ставкой: честный YTM невозможен, предупреждаем;
+  //  - будущих купонов нет вовсе — дисконтная (бескупонная) бумага: это норма,
+  //    YTM к погашению считается как дисконт цены к номиналу (K7-доп), без
+  //    ложного предупреждения о «неопределённых купонах».
+  const hasFutureCoupons = futureCoupons.length > 0;
+  const allFutureKnown = hasFutureCoupons && futureCoupons.every((c) => couponAmount(c) !== null);
+  const isDiscountBond = !hasFutureCoupons; // ни одного будущего купона — бескупонная
   const canComputeYtm =
     !floatingCoupon &&
     !amortization &&
@@ -207,7 +206,8 @@ export async function fetchBond(api: BondApi, query: string, now: Date): Promise
     Boolean(bond.maturityDate);
   let ytmPercent: number | null = null;
   let macaulayDurationYears: number | null = null;
-  if (canComputeYtm && allFutureKnown) {
+  if (canComputeYtm && (allFutureKnown || isDiscountBond)) {
+    // Потоки: объявленные купоны (у дисконтной их нет) + выкуп номинала.
     const flows: BondCashFlow[] = futureCoupons.map((c) => ({
       date: new Date(c.couponDate),
       amount: couponAmount(c) ?? 0,
@@ -217,7 +217,8 @@ export async function fetchBond(api: BondApi, query: string, now: Date): Promise
     if (ytmPercent !== null) {
       macaulayDurationYears = computeMacaulayDurationYears(flows, ytmPercent, now);
     }
-  } else if (canComputeYtm && !allFutureKnown) {
+  } else if (canComputeYtm && hasFutureCoupons && !allFutureKnown) {
+    // Купоны объявлены лишь частично — честного расчёта к погашению нет.
     warnings.push('Часть будущих купонов ещё не определена эмитентом — доходность к погашению не рассчитывается.');
   }
 
@@ -227,19 +228,31 @@ export async function fetchBond(api: BondApi, query: string, now: Date): Promise
   const offerDate = bond.callDate && new Date(bond.callDate).getTime() > now.getTime() ? bond.callDate : null;
   let ytmToOfferPercent: number | null = null;
   if (offerDate) {
+    // О самой оферте предупреждаем всегда — это факт про выпуск.
     warnings.push(
       `По выпуску есть оферта ${offerDate.slice(0, 10)}: после неё эмитент может изменить купон — ориентируйтесь на доходность к оферте.`,
     );
-    const offerTime = new Date(offerDate).getTime();
-    const couponsToOffer = futureCoupons.filter((c) => new Date(c.couponDate).getTime() <= offerTime);
-    const allKnownToOffer = couponsToOffer.every((c) => couponAmount(c) !== null);
-    if (dirtyPriceRub !== null && nominal !== null && allKnownToOffer) {
-      const flows: BondCashFlow[] = couponsToOffer.map((c) => ({
-        date: new Date(c.couponDate),
-        amount: couponAmount(c) ?? 0,
-      }));
-      flows.push({ date: new Date(offerDate), amount: nominal });
-      ytmToOfferPercent = computeEffectiveYtmPercent(flows, dirtyPriceRub, now);
+    // K4: доходность к оферте применяет ТЕ ЖЕ предохранители, что и YTM к
+    // погашению. Для флоатера/амортизации/бессрочной модель «выкуп полного
+    // номинала на оферте без амортизационных выплат» неверна — метрика была бы
+    // ложной, поэтому честно null (предупреждения по этим флагам выданы выше).
+    const canComputeYtmToOffer =
+      !floatingCoupon && !amortization && !perpetual && dirtyPriceRub !== null && nominal !== null;
+    if (canComputeYtmToOffer) {
+      const offerTime = new Date(offerDate).getTime();
+      const couponsToOffer = futureCoupons.filter((c) => new Date(c.couponDate).getTime() <= offerTime);
+      const allKnownToOffer = couponsToOffer.every((c) => couponAmount(c) !== null);
+      if (allKnownToOffer) {
+        const flows: BondCashFlow[] = couponsToOffer.map((c) => ({
+          date: new Date(c.couponDate),
+          amount: couponAmount(c) ?? 0,
+        }));
+        flows.push({ date: new Date(offerDate), amount: nominal! });
+        ytmToOfferPercent = computeEffectiveYtmPercent(flows, dirtyPriceRub!, now);
+      } else {
+        // Часть купонов до оферты не объявлена — честного расчёта к оферте нет.
+        warnings.push('Часть купонов до оферты ещё не определена эмитентом — доходность к оферте не рассчитывается.');
+      }
     }
   }
 
@@ -281,25 +294,26 @@ export async function fetchBond(api: BondApi, query: string, now: Date): Promise
 
 // Компактный ключ-значение: карточка читается сверху вниз, «—» = данных нет.
 export function renderBond(view: BondView): string {
-  const dash = '—';
-  const pct = (v: number | null): string => (v !== null ? `${v.toFixed(2)}%` : dash);
-  const money = (v: number | null): string => (v !== null ? `${v.toFixed(2)} ${view.currency}` : dash);
-  const date = (v: string | null): string => (v !== null ? v.slice(0, 10) : dash);
+  // Формат «значение или прочерк» — из общего values.js (единый вид процентов,
+  // сумм и знака «нет данных» во всех командах). Деньги дополняем валютой
+  // выпуска только при наличии значения, иначе — прочерк.
+  const money = (v: number | null): string => (v !== null ? `${moneyOrDash(v)} ${view.currency}` : DASH);
+  const date = (v: string | null): string => (v !== null ? v.slice(0, 10) : DASH);
 
   const lines = [
     `${view.name} (${view.ticker}${view.isin && view.isin !== view.ticker ? `, ${view.isin}` : ''})`,
-    `Цена: ${pct(view.pricePercent)} номинала = ${money(view.priceRub)} + НКД ${money(view.nkd)}`,
+    `Цена: ${percentOrDash(view.pricePercent)} номинала = ${money(view.priceRub)} + НКД ${money(view.nkd)}`,
     `Номинал: ${money(view.nominal)}  Погашение: ${date(view.maturityDate)}` +
       (view.yearsToMaturity !== null ? ` (через ${view.yearsToMaturity.toFixed(1)} г.)` : ''),
-    `Купон: ${view.annualCouponRub !== null ? `${view.annualCouponRub.toFixed(2)} ${view.currency}/год` : dash}` +
+    `Купон: ${view.annualCouponRub !== null ? `${moneyOrDash(view.annualCouponRub)} ${view.currency}/год` : DASH}` +
       (view.couponQuantityPerYear !== null ? `, выплат в год: ${view.couponQuantityPerYear}` : ''),
-    `Текущая купонная доходность: ${pct(view.currentCouponYieldPercent)}`,
-    `Доходность к погашению (эффективная): ${pct(view.ytmPercent)}`,
+    `Текущая купонная доходность: ${percentOrDash(view.currentCouponYieldPercent)}`,
+    `Доходность к погашению (эффективная): ${percentOrDash(view.ytmPercent)}`,
     ...(view.offerDate !== null
-      ? [`Оферта: ${date(view.offerDate)}, доходность к оферте: ${pct(view.ytmToOfferPercent)}`]
+      ? [`Оферта: ${date(view.offerDate)}, доходность к оферте: ${percentOrDash(view.ytmToOfferPercent)}`]
       : []),
     `Дюрация Маколея: ${
-      view.macaulayDurationYears !== null ? `${view.macaulayDurationYears.toFixed(2)} г.` : dash
+      view.macaulayDurationYears !== null ? `${view.macaulayDurationYears.toFixed(2)} г.` : DASH
     }`,
   ];
 

@@ -3,8 +3,13 @@
  * разбивка по корзинам, XIRR-свойство и предупреждения о пропусках.
  */
 import { describe, expect, it } from 'vitest';
-import type { OperationItem } from '../api/types.js';
-import { buildPerformanceView, classifyOperationType } from './performance.js';
+import type { OperationItem, PortfolioResponse } from '../api/types.js';
+import {
+  buildPerformanceView,
+  classifyOperationType,
+  fetchPerformance,
+  type PerformanceApi,
+} from './performance.js';
 
 const rub = (amount: number): { currency: string; units: string; nano: number } => {
   const units = Math.trunc(amount);
@@ -100,5 +105,69 @@ describe('buildPerformanceView', () => {
     expect(view.xirrPercent).toBeNull();
     expect(view.netProfitPercent).toBeNull();
     expect(view.netProfit).toBe(0);
+  });
+
+  // K18: денежную операцию без payment нельзя молча выкинуть (no-fallbacks для
+  // денежных данных) — иначе invested/withdrawn/XIRR искажаются без сигнала.
+  it('предупреждает о денежных операциях без суммы платежа (не теряем молча)', () => {
+    const items: OperationItem[] = [
+      op('in-1', '2025-01-01T00:00:00Z', 'OPERATION_TYPE_INPUT', 100000),
+      // Исполненное пополнение без payment — денежные данные утеряны шлюзом.
+      { id: 'in-broken', date: '2025-02-01T00:00:00Z', type: 'OPERATION_TYPE_INPUT' },
+    ];
+    const view = buildPerformanceView({ ...baseParams, items, currentValue: 110000 });
+    expect(view.invested).toBe(100000); // сломанная операция не попала в суммы
+    expect(view.warnings.some((w) => w.includes('без суммы платежа'))).toBe(true);
+  });
+
+  // Технические записи (bucket 'other') без payment — норма, не денежные данные:
+  // предупреждать о них нельзя, иначе получим ложную тревогу на каждом отчёте.
+  it('технические записи без суммы платежа не порождают предупреждение', () => {
+    const items: OperationItem[] = [
+      op('in-1', '2025-01-01T00:00:00Z', 'OPERATION_TYPE_INPUT', 100000),
+      { id: 'tech-1', date: '2025-02-01T00:00:00Z', type: 'OPERATION_TYPE_OVERNIGHT' },
+    ];
+    const view = buildPerformanceView({ ...baseParams, items, currentValue: 110000 });
+    expect(view.warnings.some((w) => w.includes('без суммы платежа'))).toBe(false);
+  });
+});
+
+describe('fetchPerformance', () => {
+  // K36: список счетов должен запрашиваться ровно один раз (resolveAccountId
+  // и получение openedDate переиспользуют один ответ), а операции и портфель —
+  // грузиться параллельно.
+  it('запрашивает список счетов один раз и объединяет операции с портфелем', async () => {
+    let getAccountsCalls = 0;
+    const api: PerformanceApi = {
+      getAccounts: async () => {
+        getAccountsCalls += 1;
+        return {
+          accounts: [
+            {
+              id: 'acc-1',
+              type: 'ACCOUNT_TYPE_TINKOFF',
+              name: 'Брокерский',
+              status: 'ACCOUNT_STATUS_OPEN',
+              openedDate: '2025-01-01T00:00:00Z',
+              accessLevel: 'ACCOUNT_ACCESS_LEVEL_FULL_ACCESS',
+            },
+          ],
+        };
+      },
+      getOperationsByCursor: async () => ({
+        hasNext: false,
+        items: [op('in-1', '2025-01-01T00:00:00Z', 'OPERATION_TYPE_INPUT', 100000)],
+      }),
+      // В расчёте используется только totalAmountPortfolio — остальное не нужно.
+      getPortfolio: async () =>
+        ({ totalAmountPortfolio: rub(110000) }) as unknown as PortfolioResponse,
+    };
+
+    const view = await fetchPerformance(api, { now: new Date('2026-01-01T00:00:00Z') });
+
+    expect(getAccountsCalls).toBe(1); // без дублирующего сетевого вызова
+    expect(view.accountId).toBe('acc-1');
+    expect(view.invested).toBe(100000);
+    expect(view.currentValue).toBe(110000);
   });
 });

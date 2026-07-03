@@ -75,7 +75,7 @@ export interface PortfolioResponse {
   totalAmountFutures?: MoneyValue;
   totalAmountOptions?: MoneyValue;
   totalAmountSp?: MoneyValue;
-  expectedYield: Quotation; // относительная доходность портфеля, %
+  expectedYield?: Quotation; // относительная доходность портфеля, %; шлюз опускает при нуле
   dailyYield?: MoneyValue;
   dailyYieldRelative?: Quotation;
   positions: PortfolioPosition[];

@@ -15,8 +15,12 @@
 import { AppError } from '../api/errors.js';
 import { formatAmount, formatSigned, moneyToNumber } from '../api/money.js';
 import type { GetOperationsByCursorResponse, OperationItem } from '../api/types.js';
-import { MAX_OPERATIONS_PAGES, OPERATIONS_PAGE_LIMIT } from '../config/config.js';
+import { MAX_OPERATIONS_PAGES, MS_PER_DAY, OPERATIONS_PAGE_LIMIT } from '../config/config.js';
+// Даты операций приходят из API в UTC, а показываем их пользователю по МСК —
+// поэтому время/дата обязаны проходить через московские форматтеры.
+import { formatMoscowDate, formatMoscowDateTime } from '../format/datetime.js';
 import { renderTable } from '../format/table.js';
+import { DASH } from '../format/values.js';
 import { resolveAccountId, type AccountsApi } from './resolve-account.js';
 
 export interface OperationsCursorApi {
@@ -51,8 +55,6 @@ export interface OperationView {
 function emptyToNull(value: string | undefined): string | null {
   return value ? value : null;
 }
-
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 // now передаётся явно (инъекция времени) — логика периода детерминированно тестируема.
 export function computeOperationsRange(days: number, now: Date): { from: string; to: string } {
@@ -128,10 +130,10 @@ export function renderOperations(result: {
   to: string;
   operations: OperationView[];
 }): string {
-  const dash = '—';
+  // Границы периода — пользователю по МСК (иначе у вечерних границ уедет день).
   const header = [
     `Счёт: ${result.accountId}`,
-    `Период: ${result.from.slice(0, 10)} — ${result.to.slice(0, 10)}`,
+    `Период: ${formatMoscowDate(result.from)} — ${formatMoscowDate(result.to)}`,
     `Операций: ${result.operations.length}`,
     '',
   ].join('\n');
@@ -143,14 +145,16 @@ export function renderOperations(result: {
   const table = renderTable(
     ['Дата', 'Операция', 'Тикер', 'Сумма', 'Валюта', 'Кол-во', 'Цена', 'Комиссия'],
     result.operations.map((op) => [
-      op.date.slice(0, 16).replace('T', ' '),
+      // Время операции — в МСК: голый срез UTC смещал бы время на -3ч, а у
+      // ночных/вечерних сделок уводил бы календарную дату на день назад.
+      formatMoscowDateTime(op.date),
       op.description,
-      op.ticker ?? dash,
-      op.payment !== null ? formatSigned(op.payment) : dash,
-      op.currency !== null ? op.currency.toUpperCase() : dash,
-      op.quantity !== null ? formatAmount(op.quantity, 0) : dash,
-      op.price !== null ? formatAmount(op.price) : dash,
-      op.commission !== null ? formatSigned(op.commission) : dash,
+      op.ticker ?? DASH,
+      op.payment !== null ? formatSigned(op.payment) : DASH,
+      op.currency !== null ? op.currency.toUpperCase() : DASH,
+      op.quantity !== null ? formatAmount(op.quantity, 0) : DASH,
+      op.price !== null ? formatAmount(op.price) : DASH,
+      op.commission !== null ? formatSigned(op.commission) : DASH,
     ]),
   );
   return `${header}${table}`;

@@ -6,14 +6,15 @@
  * - HistoryApi — контракт клиента;
  * - pickCandleInterval(days) — выбор интервала под лимиты API;
  * - computeCandleStats(candles, interval) — чистая статистика по свечам;
- * - resolveMarketInstrument(api, query) — резолв тикера с поддержкой
- *   индикативных инструментов (индексы: IMOEX, RTSI);
  * - fetchHistory(api, params) — загрузка + сборка представления;
  * - renderHistory(view) — человекочитаемый отчёт.
+ *
+ * Резолв инструмента (в т.ч. индексов IMOEX/RTSI через индикативы) вынесен в
+ * общий resolveMarketInstrument из resolve-instrument.ts — единый для всех
+ * рыночных команд.
  */
 import { AppError } from '../api/errors.js';
-import { formatAmount, formatSigned, quotationToNumber } from '../api/money.js';
-import type { IndicativesResponse } from '../api/types-catalog.js';
+import { formatAmount, formatSigned, quotationToNumber, round } from '../api/money.js';
 import type { CandleInterval, GetCandlesResponse, HistoricCandle } from '../api/types-market.js';
 import {
   CANDLES_HOUR_MAX_DAYS,
@@ -23,17 +24,18 @@ import {
   TRADING_DAYS_PER_YEAR,
   WEEKS_PER_YEAR,
   MONTHS_PER_YEAR,
+  MS_PER_DAY,
 } from '../config/config.js';
-import { resolveInstrument, type InstrumentSearchApi } from './resolve-instrument.js';
+import { DASH } from '../format/values.js';
+import { resolveMarketInstrument, type MarketInstrumentApi } from './resolve-instrument.js';
 
-export interface HistoryApi extends InstrumentSearchApi {
+export interface HistoryApi extends MarketInstrumentApi {
   getCandles(params: {
     instrumentId: string;
     from: string;
     to: string;
     interval: CandleInterval;
   }): Promise<GetCandlesResponse>;
-  getIndicatives(): Promise<IndicativesResponse>;
 }
 
 export interface CandleView {
@@ -71,8 +73,6 @@ export interface HistoryView {
   benchmark: { ticker: string; name: string; changePercent: number | null; outperformancePercent: number | null } | null;
 }
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
 // Лимиты GetCandles на глубину одного запроса зависят от интервала —
 // выбираем самый детальный интервал, влезающий в один запрос.
 export function pickCandleInterval(days: number): CandleInterval {
@@ -106,10 +106,6 @@ function periodsPerYear(interval: CandleInterval): number | null {
     default:
       return null; // для часовых свечей аннуализация вводит в заблуждение
   }
-}
-
-function round2(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 export function toCandleViews(candles: HistoricCandle[]): CandleView[] {
@@ -148,7 +144,7 @@ export function computeCandleStats(candles: CandleView[], interval: CandleInterv
     if (returns.length >= 2) {
       const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
       const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1);
-      annualizedVolatilityPercent = round2(Math.sqrt(variance) * Math.sqrt(perYear) * 100);
+      annualizedVolatilityPercent = round(Math.sqrt(variance) * Math.sqrt(perYear) * 100);
     }
   }
 
@@ -158,13 +154,13 @@ export function computeCandleStats(candles: CandleView[], interval: CandleInterv
     lastClose,
     changePercent:
       firstClose !== null && firstClose !== 0 && lastClose !== null
-        ? round2((lastClose / firstClose - 1) * 100)
+        ? round((lastClose / firstClose - 1) * 100)
         : null,
     minLow,
     maxHigh,
     positionInRangePercent:
       lastClose !== null && minLow !== null && maxHigh !== null && maxHigh > minLow
-        ? round2(((lastClose - minLow) / (maxHigh - minLow)) * 100)
+        ? round(((lastClose - minLow) / (maxHigh - minLow)) * 100)
         : null,
     annualizedVolatilityPercent,
     avgVolume:
@@ -172,92 +168,79 @@ export function computeCandleStats(candles: CandleView[], interval: CandleInterv
   };
 }
 
-// Резолв для рыночных команд: сперва обычные инструменты (точный тикер/ISIN),
-// затем индикативные (индексы) — это осознанная логика разрешения имён,
-// а не подмена данных.
-export async function resolveMarketInstrument(
-  api: HistoryApi,
-  query: string,
-): Promise<{ uid: string; ticker: string; name: string; kind: 'instrument' | 'indicative' }> {
-  try {
-    const instrument = await resolveInstrument(api, query);
-    return { uid: instrument.uid, ticker: instrument.ticker, name: instrument.name, kind: 'instrument' };
-  } catch (err) {
-    if (!(err instanceof AppError) || err.code !== 'APP_TINVEST_INSTRUMENT_NOT_FOUND') {
-      throw err;
-    }
-    const { instruments } = await api.getIndicatives();
-    const normalized = query.trim().toUpperCase();
-    const match = instruments.find((i) => i.ticker.toUpperCase() === normalized);
-    if (!match) {
-      throw err; // исходная ошибка понятнее: «не найден точный тикер/ISIN»
-    }
-    return { uid: match.uid, ticker: match.ticker, name: match.name, kind: 'indicative' };
-  }
-}
-
 export async function fetchHistory(
   api: HistoryApi,
   params: { query: string; days: number; vs?: string; now: Date },
 ): Promise<HistoryView> {
-  const instrument = await resolveMarketInstrument(api, params.query);
+  // K40: чистая валидация периода выполняется ДО любых сетевых вызовов —
+  // при слишком большом --days pickCandleInterval бросит APP_CLI_INVALID_ARGUMENT
+  // сразу, не потратив ни одного запроса к API (резолв, свечи).
   const interval = pickCandleInterval(params.days);
   const from = new Date(params.now.getTime() - params.days * MS_PER_DAY).toISOString();
   const to = params.now.toISOString();
 
-  const resp = await api.getCandles({ instrumentId: instrument.uid, from, to, interval });
-  const candles = toCandleViews(resp.candles ?? []);
-  const stats = computeCandleStats(candles, interval);
+  // Загрузка одной серии: резолв рыночного инструмента (тикер/ISIN или индекс)
+  // + свечи в общем окне/интервале. Инкапсулирует одинаковую логику для
+  // основного инструмента и бенчмарка, чтобы их можно было грузить параллельно.
+  const loadSeries = async (query: string) => {
+    const instrument = await resolveMarketInstrument(api, query);
+    const resp = await api.getCandles({ instrumentId: instrument.uid, from, to, interval });
+    const candles = toCandleViews(resp.candles ?? []);
+    return { instrument, candles, stats: computeCandleStats(candles, interval) };
+  };
+
+  // K38: основной инструмент и бенчмарк (--vs) независимы — грузим параллельно,
+  // а не последовательно, чтобы вдвое сократить время при сравнении с индексом.
+  const [main, bench] = await Promise.all([
+    loadSeries(params.query),
+    params.vs ? loadSeries(params.vs) : Promise.resolve(null),
+  ]);
 
   // Бенчмарк: то же окно и интервал, сравнение по изменению за период.
   let benchmark: HistoryView['benchmark'] = null;
-  if (params.vs) {
-    const benchInstrument = await resolveMarketInstrument(api, params.vs);
-    const benchResp = await api.getCandles({ instrumentId: benchInstrument.uid, from, to, interval });
-    const benchStats = computeCandleStats(toCandleViews(benchResp.candles ?? []), interval);
+  if (bench) {
     benchmark = {
-      ticker: benchInstrument.ticker,
-      name: benchInstrument.name,
-      changePercent: benchStats.changePercent,
+      ticker: bench.instrument.ticker,
+      name: bench.instrument.name,
+      changePercent: bench.stats.changePercent,
       outperformancePercent:
-        stats.changePercent !== null && benchStats.changePercent !== null
-          ? round2(stats.changePercent - benchStats.changePercent)
+        main.stats.changePercent !== null && bench.stats.changePercent !== null
+          ? round(main.stats.changePercent - bench.stats.changePercent)
           : null,
     };
   }
 
   return {
-    ticker: instrument.ticker,
-    name: instrument.name,
-    instrumentKind: instrument.kind,
+    ticker: main.instrument.ticker,
+    name: main.instrument.name,
+    instrumentKind: main.instrument.kind,
     from,
     to,
     interval,
-    stats,
-    candles,
+    stats: main.stats,
+    candles: main.candles,
     benchmark,
   };
 }
 
 export function renderHistory(view: HistoryView): string {
-  const dash = '—';
   const s = view.stats;
   const lines = [
     `${view.ticker} — ${view.name}`,
     `Период: ${view.from.slice(0, 10)} — ${view.to.slice(0, 10)} (свечи: ${view.interval.replace('CANDLE_INTERVAL_', '').toLowerCase()})`,
     '',
-    `Изменение за период: ${s.changePercent !== null ? `${formatSigned(s.changePercent)} %` : dash}`,
-    `Первая/последняя цена: ${s.firstClose !== null ? formatAmount(s.firstClose) : dash} → ${s.lastClose !== null ? formatAmount(s.lastClose) : dash}`,
-    `Диапазон: ${s.minLow !== null ? formatAmount(s.minLow) : dash} … ${s.maxHigh !== null ? formatAmount(s.maxHigh) : dash}` +
+    `Изменение за период: ${s.changePercent !== null ? `${formatSigned(s.changePercent)} %` : DASH}`,
+    `Первая/последняя цена: ${s.firstClose !== null ? formatAmount(s.firstClose) : DASH} → ${s.lastClose !== null ? formatAmount(s.lastClose) : DASH}`,
+    `Диапазон: ${s.minLow !== null ? formatAmount(s.minLow) : DASH} … ${s.maxHigh !== null ? formatAmount(s.maxHigh) : DASH}` +
       (s.positionInRangePercent !== null ? ` (цена на ${formatAmount(s.positionInRangePercent, 0)}% диапазона)` : ''),
-    `Волатильность (годовая): ${s.annualizedVolatilityPercent !== null ? `${formatAmount(s.annualizedVolatilityPercent)} %` : dash}`,
-    `Средний объём за свечу: ${s.avgVolume !== null ? formatAmount(s.avgVolume, 0) : dash}`,
+    `Волатильность (годовая): ${s.annualizedVolatilityPercent !== null ? `${formatAmount(s.annualizedVolatilityPercent)} %` : DASH}`,
+    `Средний объём за свечу: ${s.avgVolume !== null ? formatAmount(s.avgVolume, 0) : DASH}`,
   ];
   if (view.benchmark) {
     lines.push(
       '',
       `Бенчмарк ${view.benchmark.ticker} (${view.benchmark.name}): ` +
-        `${view.benchmark.changePercent !== null ? `${formatSigned(view.benchmark.changePercent)} %` : dash}` +
+        `${view.benchmark.changePercent !== null ? `${formatSigned(view.benchmark.changePercent)} %` : DASH}` +
         (view.benchmark.outperformancePercent !== null
           ? `, отставание/опережение: ${formatSigned(view.benchmark.outperformancePercent)} п.п.`
           : ''),

@@ -10,7 +10,7 @@
  * - renderReports(view) — человекочитаемый вывод.
  */
 import type { AssetReportEvent, GetAssetReportsResponse } from '../api/types-info.js';
-import { REPORTS_WINDOW_DAYS } from '../config/config.js';
+import { MS_PER_DAY, REPORTS_WINDOW_DAYS } from '../config/config.js';
 import { resolveInstrument, type InstrumentSearchApi } from './resolve-instrument.js';
 
 export interface ReportsApi extends InstrumentSearchApi {
@@ -64,8 +64,6 @@ export function buildReportsView(params: {
     }));
   return { ticker: params.ticker, name: params.name, from: params.from, to: params.to, events };
 }
-
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 export async function fetchReports(api: ReportsApi, query: string, now: Date): Promise<ReportsView> {
   const instrument = await resolveInstrument(api, query);

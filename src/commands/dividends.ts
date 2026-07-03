@@ -10,10 +10,14 @@
  *
  * TTM-доходность = сумма выплат с датой фиксации реестра за последние
  * 365 дней / текущая цена. Это трейлинг-метрика: будущие дивиденды могут
- * отличаться (отдельно показываем уже объявленные).
+ * отличаться (отдельно показываем уже объявленные). Доходность считается
+ * только при совпадении валюты выплат и валюты котировки; иначе — null и
+ * предупреждение (см. warnings в DividendsView).
  */
 import { moneyToNumber, quotationToNumber } from '../api/money.js';
 import type { DividendItem, GetDividendsResponse, GetLastPricesResponse } from '../api/types.js';
+import { MS_PER_DAY, MS_PER_YEAR } from '../config/config.js';
+import { DASH, formatOrDash, percentOrDash } from '../format/values.js';
 import { renderTable } from '../format/table.js';
 import { resolveInstrument, type InstrumentSearchApi } from './resolve-instrument.js';
 
@@ -22,10 +26,10 @@ export interface DividendsApi extends InstrumentSearchApi {
   getLastPrices(instrumentIds: string[]): Promise<GetLastPricesResponse>;
 }
 
-// Глубина истории и горизонт объявленных выплат.
+// Глубина истории и горизонт объявленных выплат. Единицы времени (MS_PER_DAY,
+// MS_PER_YEAR) берём из общего конфига, а не дублируем локально.
 const DIVIDENDS_LOOKBACK_YEARS = 6;
 const DIVIDENDS_LOOKAHEAD_DAYS = 366;
-const MS_PER_DAY = 24 * 3600 * 1000;
 const TTM_WINDOW_DAYS = 365;
 
 export interface DividendPaymentView {
@@ -47,6 +51,9 @@ export interface DividendsView {
   ttmYieldPercent: number | null; // TTM-сумма к текущей цене
   upcoming: DividendPaymentView[]; // объявленные будущие выплаты
   history: DividendPaymentView[]; // прошедшие, новые сверху
+  // Предупреждения о несопоставимости данных (например, дивиденды и цена
+  // в разных валютах — доходность не рассчитана).
+  warnings: string[];
 }
 
 // Ключевая дата выплаты для фильтров — дата фиксации реестра;
@@ -76,7 +83,7 @@ export async function fetchDividends(
   // Дивиденды платят и акции, и фонды — тип инструмента не ограничиваем.
   const resolved = await resolveInstrument(api, query);
 
-  const from = new Date(now.getTime() - DIVIDENDS_LOOKBACK_YEARS * 365 * MS_PER_DAY).toISOString();
+  const from = new Date(now.getTime() - DIVIDENDS_LOOKBACK_YEARS * MS_PER_YEAR).toISOString();
   const to = new Date(now.getTime() + DIVIDENDS_LOOKAHEAD_DAYS * MS_PER_DAY).toISOString();
   const [dividendsResponse, pricesResponse] = await Promise.all([
     api.getDividends(resolved.uid, from, to),
@@ -91,6 +98,9 @@ export async function fetchDividends(
   const upcoming = payments.filter((d) => (eventTime(d) ?? 0) > now.getTime());
   const history = payments.filter((d) => (eventTime(d) ?? 0) <= now.getTime());
 
+  // Предупреждения о несопоставимости данных (валюты и т. п.).
+  const warnings: string[] = [];
+
   // TTM: сумма выплат за последние 365 дней. Если среди них есть выплаты
   // без суммы или в разных валютах — сумма несопоставима, честный null.
   const ttmWindowStart = now.getTime() - TTM_WINDOW_DAYS * MS_PER_DAY;
@@ -101,11 +111,33 @@ export async function fetchDividends(
   const ttmSum = ttmComputable
     ? ttmItems.reduce((sum, d) => sum + moneyToNumber(d.dividendNet!), 0)
     : null;
+  // Единственная валюта выплат TTM (когда сумма сопоставима) — нужна ниже для
+  // сверки с валютой котировки.
+  const ttmCurrency = ttmComputable ? [...ttmCurrencies][0]! : null;
 
   const lastPrice = pricesResponse.lastPrices.find((p) => p.instrumentUid === resolved.uid);
   const currentPrice = lastPrice?.price ? quotationToNumber(lastPrice.price) : null;
+
+  // K6: доходность = сумма дивидендов / цена, поэтому валюта выплат обязана
+  // совпадать с валютой котировки инструмента (resolved.currency). Кейс ГДР:
+  // дивиденды в USD, цена на МосБирже в рублях — деля USD на RUB, получили бы
+  // доходность, заниженную в ~курс раз. Курсов в ответах API здесь нет, привести
+  // к одной валюте нельзя. no-fallbacks: при подтверждённом расхождении валют не
+  // считаем доходность молча — ttmYieldPercent=null + явное предупреждение.
+  const priceCurrency = resolved.currency ?? null;
+  const currencyMismatch =
+    ttmCurrency !== null &&
+    priceCurrency !== null &&
+    ttmCurrency.toLowerCase() !== priceCurrency.toLowerCase();
+  if (currencyMismatch) {
+    warnings.push(
+      `Дивиденды в ${ttmCurrency!.toUpperCase()}, цена в ${priceCurrency!.toUpperCase()} — ` +
+        'доходность TTM не рассчитана из-за разных валют.',
+    );
+  }
+
   const ttmYieldPercent =
-    ttmSum !== null && currentPrice !== null && currentPrice > 0
+    ttmSum !== null && currentPrice !== null && currentPrice > 0 && !currencyMismatch
       ? (ttmSum / currentPrice) * 100
       : null;
 
@@ -118,23 +150,25 @@ export async function fetchDividends(
     ttmYieldPercent,
     upcoming: upcoming.map(toPaymentView),
     history: history.map(toPaymentView),
+    warnings,
   };
 }
 
 export function renderDividends(view: DividendsView): string {
-  const dash = '—';
+  // Прочерк «нет данных» и формат процентов — из общих values-хелперов,
+  // чтобы «—» и «%» выглядели одинаково во всех командах.
   const lines = [
     `${view.name} (${view.ticker})`,
-    `Текущая цена: ${view.currentPrice !== null ? view.currentPrice.toFixed(2) : dash}`,
-    `Выплачено за 12 мес: ${view.ttmSum !== null ? view.ttmSum.toFixed(2) : dash}` +
-      `  Дивдоходность TTM: ${view.ttmYieldPercent !== null ? `${view.ttmYieldPercent.toFixed(2)}%` : dash}`,
+    `Текущая цена: ${formatOrDash(view.currentPrice)}`,
+    `Выплачено за 12 мес: ${formatOrDash(view.ttmSum)}` +
+      `  Дивдоходность TTM: ${percentOrDash(view.ttmYieldPercent)}`,
   ];
 
   const row = (p: DividendPaymentView): string[] => [
-    p.recordDate ? p.recordDate.slice(0, 10) : dash,
-    p.lastBuyDate ? p.lastBuyDate.slice(0, 10) : dash,
-    p.amount !== null ? p.amount.toFixed(2) : dash,
-    p.yieldPercent !== null ? `${p.yieldPercent.toFixed(2)}%` : dash,
+    p.recordDate ? p.recordDate.slice(0, 10) : DASH,
+    p.lastBuyDate ? p.lastBuyDate.slice(0, 10) : DASH,
+    formatOrDash(p.amount),
+    percentOrDash(p.yieldPercent),
   ];
   const headers = ['Реестр', 'Купить до', 'На бумагу', 'Доходность'];
 
@@ -145,6 +179,10 @@ export function renderDividends(view: DividendsView): string {
     lines.push('', 'История выплат:', renderTable(headers, view.history.map(row)));
   } else {
     lines.push('', 'Выплат за рассматриваемый период не найдено.');
+  }
+  // Предупреждения (несопоставимость валют и т. п.) — заметным блоком в конце.
+  for (const warning of view.warnings) {
+    lines.push('', `⚠ ${warning}`);
   }
   return lines.join('\n');
 }

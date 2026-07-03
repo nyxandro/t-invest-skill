@@ -9,9 +9,11 @@
  * - fetchInsiders(api, query, limit) — резолв + загрузка + сборка;
  * - renderInsiders(view) — человекочитаемый вывод.
  */
-import { quotationToNumber, formatAmount } from '../api/money.js';
+import { quotationToNumberOrNull, round } from '../api/money.js';
 import type { GetInsiderDealsResponse, InsiderDeal } from '../api/types-info.js';
+import { directionLabel } from '../format/direction.js';
 import { renderTable } from '../format/table.js';
+import { DASH, moneyOrDash } from '../format/values.js';
 import { resolveInstrument, type InstrumentSearchApi } from './resolve-instrument.js';
 
 export interface InsidersApi extends InstrumentSearchApi {
@@ -38,6 +40,8 @@ export interface InsidersView {
   sellCount: number;
 }
 
+// Направление сделки инсайдера — собственный enum TRADE_DIRECTION_* (не order/stop),
+// поэтому маппинг локальный; на неизвестное значение честно null.
 function toDirection(raw: string | undefined): 'buy' | 'sell' | null {
   if (raw === 'TRADE_DIRECTION_BUY') {
     return 'buy';
@@ -48,13 +52,10 @@ function toDirection(raw: string | undefined): 'buy' | 'sell' | null {
   return null;
 }
 
-function round2(value: number): number {
-  return Math.round(value * 100) / 100;
-}
-
 export function buildInsidersView(ticker: string, name: string, deals: InsiderDeal[]): InsidersView {
   const views = deals.map((deal): InsiderDealView => {
-    const price = deal.price ? quotationToNumber(deal.price) : null;
+    // Опущенный protobuf-JSON price → null (в отличие от настоящего 0).
+    const price = quotationToNumberOrNull(deal.price);
     const quantity = deal.quantity ? Number(deal.quantity) : null;
     return {
       date: deal.date?.slice(0, 10) ?? null,
@@ -63,7 +64,7 @@ export function buildInsidersView(ticker: string, name: string, deals: InsiderDe
       investorPosition: deal.investorPosition ?? null,
       quantity,
       price,
-      amount: price !== null && quantity !== null ? round2(price * quantity) : null,
+      amount: price !== null && quantity !== null ? round(price * quantity) : null,
       percentage: deal.percentage ?? null,
       disclosureDate: deal.disclosureDate?.slice(0, 10) ?? null,
     };
@@ -88,7 +89,6 @@ export async function fetchInsiders(
 }
 
 export function renderInsiders(view: InsidersView): string {
-  const dash = '—';
   const header = `${view.ticker} — ${view.name}: сделки инсайдеров (покупок: ${view.buyCount}, продаж: ${view.sellCount})`;
   if (view.deals.length === 0) {
     return `${header}\nРаскрытых сделок инсайдеров нет.`;
@@ -96,12 +96,12 @@ export function renderInsiders(view: InsidersView): string {
   const table = renderTable(
     ['Дата', 'Тип', 'Кто', 'Кол-во', 'Цена', 'Сумма'],
     view.deals.map((d) => [
-      d.date ?? dash,
-      d.direction === 'buy' ? 'покупка' : d.direction === 'sell' ? 'продажа' : dash,
-      `${d.investorName ?? dash}${d.investorPosition ? ` (${d.investorPosition})` : ''}`,
-      d.quantity !== null ? formatAmount(d.quantity, 0) : dash,
-      d.price !== null ? formatAmount(d.price) : dash,
-      d.amount !== null ? formatAmount(d.amount, 0) : dash,
+      d.date ?? DASH,
+      directionLabel(d.direction),
+      `${d.investorName ?? DASH}${d.investorPosition ? ` (${d.investorPosition})` : ''}`,
+      moneyOrDash(d.quantity, 0),
+      moneyOrDash(d.price),
+      moneyOrDash(d.amount, 0),
     ]),
   );
   return `${header}\n${table}`;

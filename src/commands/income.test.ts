@@ -99,6 +99,29 @@ describe('buildIncomeView', () => {
     expect(view.warnings.some((w) => w.includes('usd'))).toBe(true);
   });
 
+  it('K9: сегодняшняя выплата (по МСК) включается, а не считается прошлой', () => {
+    // now = 17:00 МСК 2026-07-02; выплата датирована UTC-полуночью этого же дня.
+    // Раньше фильтр по интрадей-now выкидывал её как «прошлую» — теперь граница
+    // считается по началу московских суток, и выплата обязана войти в календарь.
+    const todayNow = new Date('2026-07-02T14:00:00Z');
+    const view = buildIncomeView({
+      accountId: 'acc-1',
+      from: '2026-07-02T00:00:00.000Z',
+      to: '2027-07-02T00:00:00.000Z',
+      positions: [sharePosition],
+      namesByUid: new Map([['uid-share', 'Сбер Банк']]),
+      couponsByUid: new Map(),
+      dividendsByUid: new Map([['uid-share', [dividend('2026-07-02T00:00:00Z', 5)]]]),
+      now: todayNow,
+    });
+
+    expect(view.events).toHaveLength(1);
+    expect(view.events[0]?.date).toBe('2026-07-02');
+    // 5 × 20 бумаг = 100 ₽ входит в горизонтальный и месячный итоги.
+    expect(view.horizonTotal).toBe(100);
+    expect(view.monthlyTotals).toEqual([{ month: '2026-07', total: 100 }]);
+  });
+
   it('отменённые и прошедшие дивиденды не попадают в календарь', () => {
     const view = build({
       dividendsByUid: new Map([

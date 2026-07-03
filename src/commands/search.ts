@@ -10,6 +10,7 @@
  */
 import type { FindInstrumentResponse } from '../api/types.js';
 import { renderTable, truncate } from '../format/table.js';
+import { DASH } from '../format/values.js';
 
 export interface SearchApi {
   findInstrument(query: string): Promise<FindInstrumentResponse>;
@@ -50,7 +51,6 @@ export function renderSearchResults(views: SearchResultView[]): string {
   if (views.length === 0) {
     return 'Ничего не найдено. Уточните запрос: название компании, тикер или ISIN.';
   }
-  const dash = '—';
   return renderTable(
     ['Тикер', 'Название', 'Тип', 'Класс', 'Валюта', 'Лот'],
     views.map((v) => [
@@ -58,8 +58,8 @@ export function renderSearchResults(views: SearchResultView[]): string {
       truncate(v.name, MAX_NAME_WIDTH),
       v.instrumentType,
       v.classCode,
-      v.currency ? v.currency.toUpperCase() : dash,
-      v.lot !== null ? String(v.lot) : dash,
+      v.currency ? v.currency.toUpperCase() : DASH,
+      v.lot !== null ? String(v.lot) : DASH,
     ]),
   );
 }

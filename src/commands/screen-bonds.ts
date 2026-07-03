@@ -11,7 +11,7 @@
  * - screenBonds(api, params) — полный конвейер скрининга;
  * - renderScreenBonds(view) — таблица результатов.
  */
-import { moneyToNumber, quotationToNumber, formatAmount } from '../api/money.js';
+import { moneyToNumber, quotationToNumber, formatAmount, round } from '../api/money.js';
 import type { GetBondCouponsResponse, GetLastPricesResponse } from '../api/types.js';
 import type { BondListItem } from '../api/types-catalog.js';
 import { loadCatalog, contourForMode, type CatalogApi } from '../catalog/instrument-catalog.js';
@@ -26,13 +26,21 @@ import {
   BATCH_MIN_INTERVAL_MS,
   CATALOG_CACHE_DIR,
   LAST_PRICES_CHUNK,
+  MS_PER_DAY,
+  MS_PER_YEAR,
   SCREEN_BONDS_MAX_CANDIDATES,
   SCREEN_TOP_DEFAULT,
   type TInvestMode,
 } from '../config/config.js';
-import { renderTable } from '../format/table.js';
+import { renderTable, truncate } from '../format/table.js';
+import { DASH, moneyOrDash } from '../format/values.js';
 import { mapWithConcurrency } from '../util/concurrency.js';
-import { computeEffectiveYtmPercent, computeMacaulayDurationYears, type BondCashFlow } from './bond-math.js';
+import {
+  computeEffectiveYtmPercent,
+  computeMacaulayDurationYears,
+  couponAmount,
+  type BondCashFlow,
+} from './bond-math.js';
 
 export interface ScreenBondsApi extends CatalogApi {
   getLastPrices(instrumentIds: string[]): Promise<GetLastPricesResponse>;
@@ -74,9 +82,6 @@ export interface ScreenBondsView {
   rows: ScreenBondRow[];
   warnings: string[];
 }
-
-const MS_PER_YEAR = 365 * 24 * 3600 * 1000;
-const MS_PER_DAY = 24 * 3600 * 1000;
 
 // Порядок уровней риска для фильтра --risk-max.
 const RISK_ORDER: Record<string, number> = {
@@ -165,19 +170,6 @@ export function rankAndCapCandidates(items: BondListItem[], cap: number): BondLi
     .slice(0, cap);
 }
 
-// Сумма купона; null — выплата не определена (protobuf опускает нули).
-function couponAmount(coupon: { payOneBond?: { currency: string; units: string; nano: number } }): number | null {
-  if (!coupon.payOneBond) {
-    return null;
-  }
-  const value = moneyToNumber(coupon.payOneBond);
-  return value > 0 ? value : null;
-}
-
-function round2(value: number): number {
-  return Math.round(value * 100) / 100;
-}
-
 export async function screenBonds(
   api: ScreenBondsApi,
   params: { filter: ScreenBondsFilter; mode: TInvestMode; now: Date; cacheDir?: string },
@@ -251,8 +243,12 @@ export async function screenBonds(
         return t > now.getTime() && t <= horizonTime + MS_PER_DAY;
       })
       .sort((a, b) => a.couponDate.localeCompare(b.couponDate));
-    // Все будущие купоны до горизонта должны быть объявлены — иначе пропуск.
-    if (future.length === 0 || !future.every((c) => couponAmount(c) !== null)) {
+    // Если купоны есть, но часть не объявлена (payOneBond опущен) — данных для
+    // честного YTM нет, пропускаем. Бескупонные (дисконтные) выпуски дают пустой
+    // future — это НЕ причина пропуска (K7): YTM таких бумаг считается по
+    // единственному потоку «номинал на горизонте» (добавляется в flows ниже),
+    // как дисконт цены к номиналу — computeEffectiveYtmPercent это умеет.
+    if (future.length > 0 && !future.every((c) => couponAmount(c) !== null)) {
       continue;
     }
     // НКД из справочника (кэш до суток) — погрешность скрининга приемлема,
@@ -274,14 +270,14 @@ export async function screenBonds(
       isin: item.isin ?? null,
       name: item.name,
       sector: item.sector ?? null,
-      pricePercent: round2(pricePercent),
-      ytmPercent: round2(ytm),
+      pricePercent: round(pricePercent),
+      ytmPercent: round(ytm),
       toOffer: horizon.toOffer,
       horizonDate: horizon.date.slice(0, 10),
-      yearsToHorizon: round2(yearsBetween(now, horizon.date)),
+      yearsToHorizon: round(yearsBetween(now, horizon.date)),
       durationYears: (() => {
         const duration = computeMacaulayDurationYears(flows, ytm, now);
-        return duration !== null ? round2(duration) : null;
+        return duration !== null ? round(duration) : null;
       })(),
       couponsPerYear: item.couponQuantityPerYear ?? null,
       riskLevel: item.riskLevel ?? null,
@@ -314,7 +310,6 @@ export function defaultScreenBondsFilter(): ScreenBondsFilter {
 }
 
 export function renderScreenBonds(view: ScreenBondsView): string {
-  const dash = '—';
   const lines = [
     `Каталог: ${view.totalInCatalog} выпусков | под фильтр: ${view.matchedStatic} | рассчитано: ${view.computed}`,
     '',
@@ -327,13 +322,13 @@ export function renderScreenBonds(view: ScreenBondsView): string {
         ['Тикер', 'Название', 'Цена %', 'YTM %', 'Горизонт', 'Лет', 'Дюрация', 'Риск'],
         view.rows.map((r) => [
           r.ticker,
-          r.name.length > 30 ? `${r.name.slice(0, 29)}…` : r.name,
+          truncate(r.name, 30),
           formatAmount(r.pricePercent),
           formatAmount(r.ytmPercent),
           `${r.horizonDate}${r.toOffer ? ' (оферта)' : ''}`,
           formatAmount(r.yearsToHorizon, 1),
-          r.durationYears !== null ? formatAmount(r.durationYears, 1) : dash,
-          r.riskLevel?.replace('RISK_LEVEL_', '').toLowerCase() ?? dash,
+          moneyOrDash(r.durationYears, 1),
+          r.riskLevel?.replace('RISK_LEVEL_', '').toLowerCase() ?? DASH,
         ]),
       ),
     );

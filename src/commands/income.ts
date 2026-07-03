@@ -9,7 +9,7 @@
  * - fetchIncome(api, params) — загрузка портфеля + выплат + сборка;
  * - renderIncome(view) — человекочитаемый календарь.
  */
-import { moneyToNumber, quotationToNumber, formatAmount } from '../api/money.js';
+import { moneyToNumber, quotationToNumber, formatAmount, round } from '../api/money.js';
 import type {
   BondCoupon,
   DividendItem,
@@ -19,9 +19,12 @@ import type {
   PortfolioPosition,
   PortfolioResponse,
 } from '../api/types.js';
-import { BATCH_CONCURRENCY, BATCH_MIN_INTERVAL_MS, INCOME_HORIZON_DAYS } from '../config/config.js';
+import { BATCH_CONCURRENCY, BATCH_MIN_INTERVAL_MS, INCOME_HORIZON_DAYS, MS_PER_DAY } from '../config/config.js';
+// MOSCOW_OFFSET_MS — для расчёта начала московских суток (граница «прошлого»).
+import { MOSCOW_OFFSET_MS } from '../format/datetime.js';
 import { renderTable } from '../format/table.js';
 import { mapWithConcurrency } from '../util/concurrency.js';
+import { couponAmount } from './bond-math.js';
 import { resolveAccountId, type AccountsApi } from './resolve-account.js';
 
 export interface IncomeApi extends AccountsApi {
@@ -52,10 +55,18 @@ export interface IncomeView {
   warnings: string[];
 }
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
-function round2(value: number): number {
-  return Math.round(value * 100) / 100;
+// Начало текущих суток по московскому времени как UTC-момент. Ловушка API:
+// даты выплат приходят UTC-полуночью, а пользователь и биржа живут по МСК —
+// сравнение «прошлого» с интрадей-моментом now выкидывало СЕГОДНЯШНЮЮ выплату
+// как уже состоявшуюся, и она выпадала из календаря и месячных итогов. Считаем
+// нижнюю границу окна от начала московского дня, чтобы выплата с датой = сегодня
+// (по МСК) попадала в расчёт.
+function moscowDayStart(now: Date): Date {
+  // Переносим момент в «настенные» координаты МСК, обнуляем время суток и
+  // возвращаем обратно в UTC — получаем UTC-инстант московской полуночи.
+  const shifted = new Date(now.getTime() + MOSCOW_OFFSET_MS);
+  shifted.setUTCHours(0, 0, 0, 0);
+  return new Date(shifted.getTime() - MOSCOW_OFFSET_MS);
 }
 
 // Купоны позиции → события календаря. Будущие купоны флоатера без суммы —
@@ -71,8 +82,10 @@ function couponEvents(
   const events: IncomeEventView[] = [];
   let unknownCoupons = 0;
   for (const coupon of coupons) {
-    const perUnit = coupon.payOneBond ? moneyToNumber(coupon.payOneBond) : 0;
-    if (perUnit <= 0) {
+    // couponAmount вернёт null и для отсутствующего payOneBond, и для нулевой
+    // суммы (необъявленный купон флоатера) — единый хелпер вместо inline-проверки.
+    const perUnit = couponAmount(coupon);
+    if (perUnit === null) {
       unknownCoupons += 1; // сумма ещё не объявлена (типично для флоатеров)
       continue;
     }
@@ -81,9 +94,10 @@ function couponEvents(
       ticker,
       name,
       kind: 'coupon',
-      perUnit: round2(perUnit),
+      perUnit: round(perUnit),
       quantity,
-      total: round2(perUnit * quantity),
+      total: round(perUnit * quantity),
+      // perUnit не null ⇒ payOneBond заведомо присутствует.
       currency: coupon.payOneBond!.currency,
     });
   }
@@ -100,7 +114,7 @@ function dividendEvents(
   position: PortfolioPosition,
   name: string | null,
   dividends: DividendItem[],
-  now: Date,
+  todayStartMs: number, // начало текущих суток по МСК (UTC-момент, в ms)
 ): IncomeEventView[] {
   const quantity = quotationToNumber(position.quantity);
   const ticker = position.ticker ?? position.figi;
@@ -111,7 +125,10 @@ function dividendEvents(
     }
     // Дата события — фактическая выплата; если её нет, дата фиксации реестра.
     const date = dividend.paymentDate ?? dividend.recordDate;
-    if (!date || Date.parse(date) <= now.getTime()) {
+    // Прошлой считаем выплату строго ДО начала сегодняшнего дня по МСК:
+    // граница — начало московских суток, а не интрадей-now, иначе сегодняшняя
+    // выплата (UTC-полночь) ошибочно уходила в «прошлое».
+    if (!date || Date.parse(date) < todayStartMs) {
       continue;
     }
     const perUnit = moneyToNumber(dividend.dividendNet);
@@ -123,9 +140,9 @@ function dividendEvents(
       ticker,
       name,
       kind: 'dividend',
-      perUnit: round2(perUnit),
+      perUnit: round(perUnit),
       quantity,
-      total: round2(perUnit * quantity),
+      total: round(perUnit * quantity),
       currency: dividend.dividendNet.currency,
     });
   }
@@ -144,6 +161,8 @@ export function buildIncomeView(params: {
 }): IncomeView {
   const warnings: string[] = [];
   const events: IncomeEventView[] = [];
+  // Единая нижняя граница «прошлого» для всех дивидендов — начало московского дня.
+  const todayStartMs = moscowDayStart(params.now).getTime();
 
   for (const position of params.positions) {
     const name = params.namesByUid.get(position.instrumentUid) ?? null;
@@ -152,7 +171,7 @@ export function buildIncomeView(params: {
       events.push(...couponEvents(position, name, coupons, warnings));
     } else if (position.instrumentType === 'share' || position.instrumentType === 'etf') {
       const dividends = params.dividendsByUid.get(position.instrumentUid) ?? [];
-      events.push(...dividendEvents(position, name, dividends, params.now));
+      events.push(...dividendEvents(position, name, dividends, todayStartMs));
     }
   }
   events.sort((a, b) => a.date.localeCompare(b.date));
@@ -184,9 +203,9 @@ export function buildIncomeView(params: {
     to: params.to,
     events,
     monthlyTotals: [...monthly.entries()]
-      .map(([month, total]) => ({ month, total: round2(total) }))
+      .map(([month, total]) => ({ month, total: round(total) }))
       .sort((a, b) => a.month.localeCompare(b.month)),
-    horizonTotal: round2(horizonTotal),
+    horizonTotal: round(horizonTotal),
     warnings,
   };
 }
@@ -197,8 +216,11 @@ export async function fetchIncome(
 ): Promise<IncomeView> {
   const accountId = await resolveAccountId(api, params.explicitAccountId);
   const portfolio = await api.getPortfolio(accountId);
-  const from = params.now.toISOString();
-  const to = new Date(params.now.getTime() + INCOME_HORIZON_DAYS * MS_PER_DAY).toISOString();
+  // Нижняя граница окна — начало московских суток, чтобы API вернул и сегодняшние
+  // выплаты (они приходят UTC-полуночью и отсекались интрадей-моментом now).
+  const windowStart = moscowDayStart(params.now);
+  const from = windowStart.toISOString();
+  const to = new Date(windowStart.getTime() + INCOME_HORIZON_DAYS * MS_PER_DAY).toISOString();
 
   const bondPositions = portfolio.positions.filter((p) => p.instrumentType === 'bond');
   const dividendPositions = portfolio.positions.filter(
@@ -207,20 +229,24 @@ export async function fetchIncome(
   const incomePositions = [...bondPositions, ...dividendPositions];
 
   // Имена инструментов — презентация для консультанта; выплаты — данные.
-  // Все батчи идут с ограничением параллелизма (лимиты API).
+  // Три батча независимы, поэтому запускаем их параллельно (Promise.all);
+  // при этом каждый сохраняет собственный троттлинг mapWithConcurrency
+  // (concurrency + минимальный интервал стартов) против лимитов API.
   const throttle = { concurrency: BATCH_CONCURRENCY, minIntervalMs: BATCH_MIN_INTERVAL_MS };
-  const names = await mapWithConcurrency(incomePositions, throttle, async (p) => {
-    const { instrument } = await api.getInstrumentByUid(p.instrumentUid);
-    return [p.instrumentUid, instrument.name] as const;
-  });
-  const coupons = await mapWithConcurrency(bondPositions, throttle, async (p) => {
-    const resp = await api.getBondCoupons(p.instrumentUid, from, to);
-    return [p.instrumentUid, resp.events ?? []] as const;
-  });
-  const dividends = await mapWithConcurrency(dividendPositions, throttle, async (p) => {
-    const resp = await api.getDividends(p.instrumentUid, from, to);
-    return [p.instrumentUid, resp.dividends ?? []] as const;
-  });
+  const [names, coupons, dividends] = await Promise.all([
+    mapWithConcurrency(incomePositions, throttle, async (p) => {
+      const { instrument } = await api.getInstrumentByUid(p.instrumentUid);
+      return [p.instrumentUid, instrument.name] as const;
+    }),
+    mapWithConcurrency(bondPositions, throttle, async (p) => {
+      const resp = await api.getBondCoupons(p.instrumentUid, from, to);
+      return [p.instrumentUid, resp.events ?? []] as const;
+    }),
+    mapWithConcurrency(dividendPositions, throttle, async (p) => {
+      const resp = await api.getDividends(p.instrumentUid, from, to);
+      return [p.instrumentUid, resp.dividends ?? []] as const;
+    }),
+  ]);
 
   return buildIncomeView({
     accountId,

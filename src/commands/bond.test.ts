@@ -16,6 +16,7 @@ import {
   offerBondCouponsFixture,
   offerBondFixture,
 } from '../api/mocks/analytics.fixture.js';
+import type { BondResponse, GetLastPricesResponse } from '../api/types.js';
 import { fetchBond } from './bond.js';
 
 // Стаб API облигаций: каждый метод отдаёт заданную фикстуру.
@@ -87,6 +88,62 @@ describe('fetchBond', () => {
     expect(view.ytmToOfferPercent).not.toBeNull();
     expect(view.ytmToOfferPercent!).toBeCloseTo(8, 1);
     expect(view.warnings.join(' ')).toContain('оферт');
+  });
+
+  it('амортизация + оферта: доходность к оферте не считается (K4)', async () => {
+    // Амортизируемый выпуск, у которого дополнительно есть оферта. Раньше ветка
+    // оферты не применяла предохранители и считала YTM к оферте с выкупом полного
+    // номинала без амортизационных выплат — ложная метрика. Ожидаем честный null.
+    const amortOfferBond: BondResponse = {
+      instrument: { ...offerBondFixture.instrument, amortizationFlag: true },
+    };
+    const view = await fetchBond(
+      apiWith({
+        getBondBy: async () => amortOfferBond,
+        getBondCoupons: async () => offerBondCouponsFixture,
+      }),
+      'RU000A10TEST',
+      NOW_FIXTURE,
+    );
+
+    expect(view.amortization).toBe(true);
+    expect(view.offerDate).toBe('2027-07-01T00:00:00Z');
+    // YTM к погашению для амортизации уже честно null; к оферте — тоже.
+    expect(view.ytmPercent).toBeNull();
+    expect(view.ytmToOfferPercent).toBeNull();
+    // Предупреждение по амортизации присутствует, метрику к оферте не навязываем.
+    expect(view.warnings.join(' ')).toContain('мортизац');
+  });
+
+  it('дисконтная (бескупонная) облигация: YTM к погашению по дисконту, без ложного предупреждения (K7)', async () => {
+    // График купонов пуст (events []), но есть номинал и дата погашения. Цена
+    // 90% номинала → доходность = дисконт цены к номиналу (~5.4% за ~2 года).
+    const discountPrice: GetLastPricesResponse = {
+      lastPrices: [
+        {
+          figi: 'TCS00A10TEST',
+          instrumentUid: 'uid-bond-fixed',
+          price: { units: '90', nano: 0 },
+          time: '2026-07-01T09:00:00Z',
+        },
+      ],
+    };
+    const view = await fetchBond(
+      apiWith({
+        getBondCoupons: async () => ({ events: [] }),
+        getLastPrices: async () => discountPrice,
+      }),
+      'RU000A10TEST',
+      NOW_FIXTURE,
+    );
+
+    expect(view.futureCoupons).toHaveLength(0);
+    // Дисконт 900 → 1000 за ~2 года ≈ 5.4% годовых.
+    expect(view.ytmPercent).not.toBeNull();
+    expect(view.ytmPercent!).toBeCloseTo(5.4, 1);
+    expect(view.macaulayDurationYears).not.toBeNull();
+    // Для бескупонной бумаги ложного «часть купонов не определена» быть не должно.
+    expect(view.warnings).toHaveLength(0);
   });
 
   it('запрашивает купоны от прошлого года до даты погашения (регрессия: без явного окна API отдаёт только год вперёд)', async () => {

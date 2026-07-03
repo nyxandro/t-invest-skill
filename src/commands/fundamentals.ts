@@ -4,19 +4,22 @@
  * Экспорты:
  * - FundamentalsApi — контракт клиента для команды;
  * - FundamentalsView — сгруппированное представление метрик;
+ * - metricOrNull(value) — единая трактовка нулевого/незаполненного коэффициента
+ *   как «нет данных» → null (общий источник для fundamentals и screen-shares, K42);
  * - fetchFundamentals(api, query) — инструмент → asset_uid → показатели;
  * - renderFundamentals(view) — вывод для терминала.
  *
  * Особенность данных: REST-шлюз протобуфа опускает нулевые числовые поля,
- * поэтому отсутствие поля здесь = «данных нет» → null (не ноль!).
- * Показатели предоставляются в основном по акциям; для облигаций и фондов
- * API возвращает пустой ответ — это явная ошибка команды с пояснением.
+ * поэтому и отсутствие поля, и нулевой double здесь = «данных нет» → null
+ * (не ноль!). Показатели предоставляются в основном по акциям; для облигаций
+ * и фондов API возвращает пустой ответ — это явная ошибка команды с пояснением.
  */
 import { AppError } from '../api/errors.js';
 import type {
   GetAssetFundamentalsResponse,
   GetInstrumentByResponse,
 } from '../api/types.js';
+import { DASH, formatOrDash, percentOrDash } from '../format/values.js';
 import { resolveInstrument, type InstrumentSearchApi } from './resolve-instrument.js';
 
 export interface FundamentalsApi extends InstrumentSearchApi {
@@ -68,6 +71,27 @@ export interface FundamentalsView {
   };
 }
 
+/**
+ * Единая трактовка значения фундаментального коэффициента (K42).
+ *
+ * Ловушка API (проверено вживую): REST-шлюз протобуфа опускает нулевые/
+ * незаполненные числовые double, поэтому нулевое значение неотличимо от «нет
+ * данных». У фундаментальных коэффициентов (P/E, P/S, P/B, EV/EBITDA, ROE,
+ * маржа, дивдоходность, капитализация, цены за 52 недели и т.п.) настоящий
+ * ноль не является осмысленным фактом, поэтому и `0`, и `undefined` означают
+ * одно и то же — «данных нет» → null.
+ *
+ * Это ЕДИНЫЙ источник трактовки для команд fundamentals и screen-shares:
+ * раньше fundamentals сохранял буквальный 0 как факт («P/E 0.00»), а screen-
+ * shares трактовал 0 как отсутствие — одна и та же бумага получала
+ * противоположные ответы в соседних командах. Здесь трактовка сведена к одной.
+ * Осторожно: применять только к коэффициентам/долям/ценам; для гипотетических
+ * полей-счётчиков (где 0 осмыслен) нужна отдельная трактовка.
+ */
+export function metricOrNull(value: number | undefined): number | null {
+  return value !== undefined && value !== 0 ? value : null;
+}
+
 export async function fetchFundamentals(
   api: FundamentalsApi,
   query: string,
@@ -93,77 +117,76 @@ export async function fetchFundamentals(
     });
   }
 
-  // Протобуф опускает нулевые double — переводим отсутствие в null явно.
-  const orNull = (value: number | undefined): number | null => value ?? null;
+  // Единая трактовка нуля/отсутствия как «нет данных» — см. metricOrNull.
   return {
     ticker: resolved.ticker,
     name: resolved.name,
     currency: item.currency ?? null,
     valuation: {
-      marketCapitalization: orNull(item.marketCapitalization),
-      peRatioTtm: orNull(item.peRatioTtm),
-      priceToBookTtm: orNull(item.priceToBookTtm),
-      priceToSalesTtm: orNull(item.priceToSalesTtm),
-      evToEbitdaMrq: orNull(item.evToEbitdaMrq),
+      marketCapitalization: metricOrNull(item.marketCapitalization),
+      peRatioTtm: metricOrNull(item.peRatioTtm),
+      priceToBookTtm: metricOrNull(item.priceToBookTtm),
+      priceToSalesTtm: metricOrNull(item.priceToSalesTtm),
+      evToEbitdaMrq: metricOrNull(item.evToEbitdaMrq),
     },
     profitability: {
-      roe: orNull(item.roe),
-      roa: orNull(item.roa),
-      roic: orNull(item.roic),
-      netMarginMrq: orNull(item.netMarginMrq),
-      epsTtm: orNull(item.epsTtm),
+      roe: metricOrNull(item.roe),
+      roa: metricOrNull(item.roa),
+      roic: metricOrNull(item.roic),
+      netMarginMrq: metricOrNull(item.netMarginMrq),
+      epsTtm: metricOrNull(item.epsTtm),
     },
     dividends: {
-      dividendYieldDailyTtm: orNull(item.dividendYieldDailyTtm),
-      forwardAnnualDividendYield: orNull(item.forwardAnnualDividendYield),
-      fiveYearsAverageDividendYield: orNull(item.fiveYearsAverageDividendYield),
-      dividendPayoutRatioFy: orNull(item.dividendPayoutRatioFy),
-      dividendsPerShare: orNull(item.dividendsPerShare),
+      dividendYieldDailyTtm: metricOrNull(item.dividendYieldDailyTtm),
+      forwardAnnualDividendYield: metricOrNull(item.forwardAnnualDividendYield),
+      fiveYearsAverageDividendYield: metricOrNull(item.fiveYearsAverageDividendYield),
+      dividendPayoutRatioFy: metricOrNull(item.dividendPayoutRatioFy),
+      dividendsPerShare: metricOrNull(item.dividendsPerShare),
     },
     debt: {
-      totalDebtToEbitdaMrq: orNull(item.totalDebtToEbitdaMrq),
-      netDebtToEbitda: orNull(item.netDebtToEbitda),
-      currentRatioMrq: orNull(item.currentRatioMrq),
+      totalDebtToEbitdaMrq: metricOrNull(item.totalDebtToEbitdaMrq),
+      netDebtToEbitda: metricOrNull(item.netDebtToEbitda),
+      currentRatioMrq: metricOrNull(item.currentRatioMrq),
     },
     growth: {
-      oneYearAnnualRevenueGrowthRate: orNull(item.oneYearAnnualRevenueGrowthRate),
-      threeYearAnnualRevenueGrowthRate: orNull(item.threeYearAnnualRevenueGrowthRate),
-      fiveYearAnnualRevenueGrowthRate: orNull(item.fiveYearAnnualRevenueGrowthRate),
-      epsChangeFiveYears: orNull(item.epsChangeFiveYears),
+      oneYearAnnualRevenueGrowthRate: metricOrNull(item.oneYearAnnualRevenueGrowthRate),
+      threeYearAnnualRevenueGrowthRate: metricOrNull(item.threeYearAnnualRevenueGrowthRate),
+      fiveYearAnnualRevenueGrowthRate: metricOrNull(item.fiveYearAnnualRevenueGrowthRate),
+      epsChangeFiveYears: metricOrNull(item.epsChangeFiveYears),
     },
     trading: {
-      highPriceLast52Weeks: orNull(item.highPriceLast52Weeks),
-      lowPriceLast52Weeks: orNull(item.lowPriceLast52Weeks),
-      beta: orNull(item.beta),
-      freeFloat: orNull(item.freeFloat),
+      highPriceLast52Weeks: metricOrNull(item.highPriceLast52Weeks),
+      lowPriceLast52Weeks: metricOrNull(item.lowPriceLast52Weeks),
+      beta: metricOrNull(item.beta),
+      freeFloat: metricOrNull(item.freeFloat),
     },
   };
 }
 
 export function renderFundamentals(view: FundamentalsView): string {
-  const dash = '—';
-  const num = (v: number | null, digits = 2): string => (v !== null ? v.toFixed(digits) : dash);
-  const pct = (v: number | null): string => (v !== null ? `${v.toFixed(2)}%` : dash);
+  // Единый формат «значение или прочерк»: formatOrDash — числа с фикс. точностью,
+  // percentOrDash — проценты (см. src/format/values.ts). Локальные dash/num/pct
+  // удалены, чтобы символ «нет данных» и формат совпадали со всеми командами.
   // Капитализация читабельнее в миллиардах.
   const cap =
     view.valuation.marketCapitalization !== null
       ? `${(view.valuation.marketCapitalization / 1e9).toFixed(1)} млрд`
-      : dash;
+      : DASH;
 
   return [
     `${view.name} (${view.ticker})${view.currency ? `, валюта: ${view.currency}` : ''}`,
     '',
     'Оценка:',
-    `  Капитализация: ${cap}  P/E: ${num(view.valuation.peRatioTtm)}  P/B: ${num(view.valuation.priceToBookTtm)}  P/S: ${num(view.valuation.priceToSalesTtm)}  EV/EBITDA: ${num(view.valuation.evToEbitdaMrq)}`,
+    `  Капитализация: ${cap}  P/E: ${formatOrDash(view.valuation.peRatioTtm)}  P/B: ${formatOrDash(view.valuation.priceToBookTtm)}  P/S: ${formatOrDash(view.valuation.priceToSalesTtm)}  EV/EBITDA: ${formatOrDash(view.valuation.evToEbitdaMrq)}`,
     'Рентабельность:',
-    `  ROE: ${pct(view.profitability.roe)}  ROA: ${pct(view.profitability.roa)}  Маржа чистой прибыли: ${pct(view.profitability.netMarginMrq)}  EPS: ${num(view.profitability.epsTtm)}`,
+    `  ROE: ${percentOrDash(view.profitability.roe)}  ROA: ${percentOrDash(view.profitability.roa)}  Маржа чистой прибыли: ${percentOrDash(view.profitability.netMarginMrq)}  EPS: ${formatOrDash(view.profitability.epsTtm)}`,
     'Дивиденды:',
-    `  Доходность TTM: ${pct(view.dividends.dividendYieldDailyTtm)}  Форвардная: ${pct(view.dividends.forwardAnnualDividendYield)}  Средняя за 5 лет: ${pct(view.dividends.fiveYearsAverageDividendYield)}  Payout: ${pct(view.dividends.dividendPayoutRatioFy)}`,
+    `  Доходность TTM: ${percentOrDash(view.dividends.dividendYieldDailyTtm)}  Форвардная: ${percentOrDash(view.dividends.forwardAnnualDividendYield)}  Средняя за 5 лет: ${percentOrDash(view.dividends.fiveYearsAverageDividendYield)}  Payout: ${percentOrDash(view.dividends.dividendPayoutRatioFy)}`,
     'Долг и ликвидность:',
-    `  Долг/EBITDA: ${num(view.debt.totalDebtToEbitdaMrq)}  Чистый долг/EBITDA: ${num(view.debt.netDebtToEbitda)}  Current ratio: ${num(view.debt.currentRatioMrq)}`,
+    `  Долг/EBITDA: ${formatOrDash(view.debt.totalDebtToEbitdaMrq)}  Чистый долг/EBITDA: ${formatOrDash(view.debt.netDebtToEbitda)}  Current ratio: ${formatOrDash(view.debt.currentRatioMrq)}`,
     'Рост:',
-    `  Выручка 1г: ${pct(view.growth.oneYearAnnualRevenueGrowthRate)}  3г: ${pct(view.growth.threeYearAnnualRevenueGrowthRate)}  5л: ${pct(view.growth.fiveYearAnnualRevenueGrowthRate)}  EPS 5л: ${pct(view.growth.epsChangeFiveYears)}`,
+    `  Выручка 1г: ${percentOrDash(view.growth.oneYearAnnualRevenueGrowthRate)}  3г: ${percentOrDash(view.growth.threeYearAnnualRevenueGrowthRate)}  5л: ${percentOrDash(view.growth.fiveYearAnnualRevenueGrowthRate)}  EPS 5л: ${percentOrDash(view.growth.epsChangeFiveYears)}`,
     'Торговля:',
-    `  52 недели: ${num(view.trading.lowPriceLast52Weeks)}–${num(view.trading.highPriceLast52Weeks)}  Бета: ${num(view.trading.beta)}  Free float: ${pct(view.trading.freeFloat)}`,
+    `  52 недели: ${formatOrDash(view.trading.lowPriceLast52Weeks)}–${formatOrDash(view.trading.highPriceLast52Weeks)}  Бета: ${formatOrDash(view.trading.beta)}  Free float: ${percentOrDash(view.trading.freeFloat)}`,
   ].join('\n');
 }

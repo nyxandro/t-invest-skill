@@ -9,6 +9,7 @@
  */
 import type { GetAccountsResponse } from '../api/types.js';
 import { renderTable } from '../format/table.js';
+import { DASH } from '../format/values.js';
 import type { AccountsApi } from './resolve-account.js';
 
 export interface AccountView {
@@ -57,9 +58,8 @@ export async function fetchAccounts(api: AccountsApi): Promise<AccountView[]> {
 }
 
 export function renderAccounts(views: AccountView[]): string {
-  const dash = '—';
   return renderTable(
     ['ID', 'Название', 'Тип', 'Статус', 'Доступ токена', 'Открыт'],
-    views.map((v) => [v.id, v.name, v.typeText, v.statusText, v.accessText, v.openedDate ?? dash]),
+    views.map((v) => [v.id, v.name, v.typeText, v.statusText, v.accessText, v.openedDate ?? DASH]),
   );
 }

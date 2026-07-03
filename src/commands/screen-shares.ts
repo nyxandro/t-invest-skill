@@ -4,7 +4,9 @@
  *
  * ВАЖНО: нулевые коэффициенты в GetAssetFundamentals означают «нет данных»
  * (протокол не различает 0 и отсутствие) — такие бумаги НЕ проходят фильтр
- * по соответствующей метрике и уходят в конец сортировки.
+ * по соответствующей метрике и уходят в конец сортировки. Единая трактовка
+ * нуля вынесена в metricOrNull (src/commands/fundamentals.ts), чтобы screen
+ * и fundamentals не давали противоречивых ответов по одной бумаге (K42).
  *
  * Экспорты:
  * - ScreenSharesApi — контракт клиента;
@@ -13,7 +15,7 @@
  * - screenShares(api, params) — полный конвейер;
  * - renderScreenShares(view) — таблица результатов.
  */
-import { formatAmount } from '../api/money.js';
+import { round } from '../api/money.js';
 import type { AssetFundamentals, GetAssetFundamentalsResponse } from '../api/types.js';
 import type { ShareListItem } from '../api/types-catalog.js';
 import { loadCatalog, type CatalogApi } from '../catalog/instrument-catalog.js';
@@ -24,8 +26,10 @@ import {
   SCREEN_TOP_DEFAULT,
   type TInvestMode,
 } from '../config/config.js';
-import { renderTable } from '../format/table.js';
+import { renderTable, truncate } from '../format/table.js';
+import { DASH, moneyOrDash } from '../format/values.js';
 import { mapWithConcurrency } from '../util/concurrency.js';
+import { metricOrNull } from './fundamentals.js';
 
 export interface ScreenSharesApi extends CatalogApi {
   getAssetFundamentals(assetUids: string[]): Promise<GetAssetFundamentalsResponse>;
@@ -65,15 +69,9 @@ export interface ScreenSharesView {
   warnings: string[];
 }
 
-// Протокол не различает 0 и «нет данных» у коэффициентов — трактуем 0 как
-// отсутствие значения (см. заголовок файла).
-function metric(value: number | undefined): number | null {
-  return value !== undefined && value !== 0 ? value : null;
-}
-
-function round2(value: number): number {
-  return Math.round(value * 100) / 100;
-}
+// Макс. ширина колонки «Название» в таблице скринера: длинные имена
+// обрезаются, чтобы моноширинная таблица не расползалась в терминале.
+const NAME_MAX_WIDTH = 24;
 
 export function joinAndFilterShares(
   shares: ShareListItem[],
@@ -83,10 +81,10 @@ export function joinAndFilterShares(
   const rows: ScreenShareRow[] = [];
   for (const share of shares) {
     const fundamentals = share.assetUid ? fundamentalsByAssetUid.get(share.assetUid) : undefined;
-    const pe = metric(fundamentals?.peRatioTtm);
-    const pb = metric(fundamentals?.priceToBookTtm);
-    const roe = metric(fundamentals?.roe);
-    const divYield = metric(fundamentals?.dividendYieldDailyTtm);
+    const pe = metricOrNull(fundamentals?.peRatioTtm);
+    const pb = metricOrNull(fundamentals?.priceToBookTtm);
+    const roe = metricOrNull(fundamentals?.roe);
+    const divYield = metricOrNull(fundamentals?.dividendYieldDailyTtm);
 
     // Фильтры по метрикам требуют наличия метрики (нет данных — не проходит).
     if (filter.peMax !== null && (pe === null || pe <= 0 || pe > filter.peMax)) {
@@ -104,19 +102,19 @@ export function joinAndFilterShares(
     if (filter.sector !== null && (share.sector ?? '').toLowerCase() !== filter.sector.toLowerCase()) {
       continue;
     }
-    const cap = metric(fundamentals?.marketCapitalization);
+    const cap = metricOrNull(fundamentals?.marketCapitalization);
     rows.push({
       ticker: share.ticker,
       name: share.name,
       sector: share.sector ?? null,
-      marketCapBillions: cap !== null ? round2(cap / 1e9) : null,
-      pe: pe !== null ? round2(pe) : null,
-      pb: pb !== null ? round2(pb) : null,
-      roe: roe !== null ? round2(roe) : null,
-      divYieldTtm: divYield !== null ? round2(divYield) : null,
-      evEbitda: metric(fundamentals?.evToEbitdaMrq) !== null ? round2(fundamentals!.evToEbitdaMrq!) : null,
+      marketCapBillions: cap !== null ? round(cap / 1e9) : null,
+      pe: pe !== null ? round(pe) : null,
+      pb: pb !== null ? round(pb) : null,
+      roe: roe !== null ? round(roe) : null,
+      divYieldTtm: divYield !== null ? round(divYield) : null,
+      evEbitda: metricOrNull(fundamentals?.evToEbitdaMrq) !== null ? round(fundamentals!.evToEbitdaMrq!) : null,
       netDebtToEbitda:
-        metric(fundamentals?.netDebtToEbitda) !== null ? round2(fundamentals!.netDebtToEbitda!) : null,
+        metricOrNull(fundamentals?.netDebtToEbitda) !== null ? round(fundamentals!.netDebtToEbitda!) : null,
     });
   }
 
@@ -221,7 +219,6 @@ export function defaultScreenSharesFilter(): ScreenSharesFilter {
 }
 
 export function renderScreenShares(view: ScreenSharesView): string {
-  const dash = '—';
   const lines = [
     `Каталог: ${view.totalInCatalog} акций | вселенная: ${view.matchedUniverse} | с фундаменталом: ${view.withFundamentals}`,
     '',
@@ -229,18 +226,21 @@ export function renderScreenShares(view: ScreenSharesView): string {
   if (view.rows.length === 0) {
     lines.push('Подходящих акций не найдено — ослабьте фильтры.');
   } else {
+    // Ячейки — через единые хелперы «значение или прочерк» (src/format/values.ts):
+    // moneyOrDash сохраняет группировку разрядов у капитализации, DASH — общий
+    // символ «нет данных»; название обрезается общим truncate.
     lines.push(
       renderTable(
         ['Тикер', 'Название', 'Сектор', 'Кап., млрд', 'P/E', 'P/B', 'ROE %', 'Див. %'],
         view.rows.map((r) => [
           r.ticker,
-          r.name.length > 24 ? `${r.name.slice(0, 23)}…` : r.name,
-          r.sector ?? dash,
-          r.marketCapBillions !== null ? formatAmount(r.marketCapBillions, 0) : dash,
-          r.pe !== null ? formatAmount(r.pe, 1) : dash,
-          r.pb !== null ? formatAmount(r.pb, 1) : dash,
-          r.roe !== null ? formatAmount(r.roe, 1) : dash,
-          r.divYieldTtm !== null ? formatAmount(r.divYieldTtm, 1) : dash,
+          truncate(r.name, NAME_MAX_WIDTH),
+          r.sector ?? DASH,
+          moneyOrDash(r.marketCapBillions, 0),
+          moneyOrDash(r.pe, 1),
+          moneyOrDash(r.pb, 1),
+          moneyOrDash(r.roe, 1),
+          moneyOrDash(r.divYieldTtm, 1),
         ]),
       ),
     );

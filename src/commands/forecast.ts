@@ -11,9 +11,10 @@
  * явная ошибка с пояснением, а не пустой «успех».
  */
 import { AppError } from '../api/errors.js';
-import { quotationToNumber } from '../api/money.js';
-import type { GetForecastResponse, Quotation } from '../api/types.js';
+import { quotationToNumberOrNull } from '../api/money.js';
+import type { GetForecastResponse } from '../api/types.js';
 import { renderTable } from '../format/table.js';
+import { DASH, formatOrDash, percentOrDash } from '../format/values.js';
 import { resolveInstrument, type InstrumentSearchApi } from './resolve-instrument.js';
 
 export interface ForecastApi extends InstrumentSearchApi {
@@ -51,10 +52,6 @@ export interface ForecastView {
   targets: ForecastTargetView[];
 }
 
-function toNumber(q: Quotation | undefined): number | null {
-  return q ? quotationToNumber(q) : null;
-}
-
 function labelFor(recommendation: string | undefined): string | null {
   return recommendation ? (RECOMMENDATION_LABELS[recommendation] ?? recommendation) : null;
 }
@@ -79,11 +76,11 @@ export async function fetchForecast(api: ForecastApi, query: string): Promise<Fo
       ? {
           recommendation: consensus.recommendation ?? null,
           recommendationLabel: labelFor(consensus.recommendation),
-          currentPrice: toNumber(consensus.currentPrice),
-          consensusPrice: toNumber(consensus.consensus),
-          minTarget: toNumber(consensus.minTarget),
-          maxTarget: toNumber(consensus.maxTarget),
-          upsidePercent: toNumber(consensus.priceChangeRel),
+          currentPrice: quotationToNumberOrNull(consensus.currentPrice),
+          consensusPrice: quotationToNumberOrNull(consensus.consensus),
+          minTarget: quotationToNumberOrNull(consensus.minTarget),
+          maxTarget: quotationToNumberOrNull(consensus.maxTarget),
+          upsidePercent: quotationToNumberOrNull(consensus.priceChangeRel),
         }
       : null,
     targets: targets.map((t) => ({
@@ -91,23 +88,20 @@ export async function fetchForecast(api: ForecastApi, query: string): Promise<Fo
       recommendation: t.recommendation ?? null,
       recommendationLabel: labelFor(t.recommendation),
       date: t.recommendationDate ?? null,
-      targetPrice: toNumber(t.targetPrice),
-      upsidePercent: toNumber(t.priceChangeRel),
+      targetPrice: quotationToNumberOrNull(t.targetPrice),
+      upsidePercent: quotationToNumberOrNull(t.priceChangeRel),
     })),
   };
 }
 
 export function renderForecast(view: ForecastView): string {
-  const dash = '—';
-  const num = (v: number | null): string => (v !== null ? v.toFixed(2) : dash);
-  const pct = (v: number | null): string => (v !== null ? `${v.toFixed(1)}%` : dash);
-
+  // Цены — formatOrDash (2 знака), потенциал — percentOrDash (1 знак).
   const lines = [`${view.name} (${view.ticker})`];
   if (view.consensus) {
     lines.push(
-      `Консенсус: ${view.consensus.recommendationLabel ?? dash} — цель ${num(view.consensus.consensusPrice)} ` +
-        `(диапазон ${num(view.consensus.minTarget)}–${num(view.consensus.maxTarget)}), ` +
-        `потенциал ${pct(view.consensus.upsidePercent)} к цене ${num(view.consensus.currentPrice)}`,
+      `Консенсус: ${view.consensus.recommendationLabel ?? DASH} — цель ${formatOrDash(view.consensus.consensusPrice)} ` +
+        `(диапазон ${formatOrDash(view.consensus.minTarget)}–${formatOrDash(view.consensus.maxTarget)}), ` +
+        `потенциал ${percentOrDash(view.consensus.upsidePercent, 1)} к цене ${formatOrDash(view.consensus.currentPrice)}`,
     );
   }
   if (view.targets.length > 0) {
@@ -117,10 +111,10 @@ export function renderForecast(view: ForecastView): string {
         ['Аналитик', 'Рекомендация', 'Цель', 'Потенциал', 'Дата'],
         view.targets.map((t) => [
           t.company,
-          t.recommendationLabel ?? dash,
-          num(t.targetPrice),
-          pct(t.upsidePercent),
-          t.date ? t.date.slice(0, 10) : dash,
+          t.recommendationLabel ?? DASH,
+          formatOrDash(t.targetPrice),
+          percentOrDash(t.upsidePercent, 1),
+          t.date ? t.date.slice(0, 10) : DASH,
         ]),
       ),
     );

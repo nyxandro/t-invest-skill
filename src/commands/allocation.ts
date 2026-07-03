@@ -10,7 +10,7 @@
  * - fetchAllocation(api, explicitAccountId?) — загрузка + сборка;
  * - renderAllocation(view) — человекочитаемый отчёт.
  */
-import { moneyToNumber, quotationToNumber, formatAmount } from '../api/money.js';
+import { moneyToNumber, quotationToNumber, formatAmount, round } from '../api/money.js';
 import type { InstrumentDetails, PortfolioPosition, PortfolioResponse } from '../api/types.js';
 import { loadCatalog, type CatalogApi } from '../catalog/instrument-catalog.js';
 import { CONCENTRATION_WARN_PERCENT, type TInvestMode } from '../config/config.js';
@@ -61,17 +61,13 @@ const TYPE_LABELS: Record<string, string> = {
   sp: 'структурные ноты',
 };
 
-function round2(value: number): number {
-  return Math.round(value * 100) / 100;
-}
-
 // Группировка стоимостей по ключу → срезы с весами, по убыванию доли.
 function toSlices(groups: Map<string, number>, totalValue: number): AllocationSlice[] {
   return [...groups.entries()]
     .map(([key, value]) => ({
       key,
-      value: round2(value),
-      weightPercent: totalValue > 0 ? round2((value / totalValue) * 100) : 0,
+      value: round(value),
+      weightPercent: totalValue > 0 ? round((value / totalValue) * 100) : 0,
     }))
     .sort((a, b) => b.value - a.value);
 }
@@ -91,6 +87,19 @@ export function buildAllocationView(params: {
   const byCountry = new Map<string, number>();
   const concentration: ConcentrationEntry[] = [];
 
+  // K5: базовая валюта портфеля — валюта итоговой суммы totalAmountPortfolio
+  // (GetPortfolio запрашивается с currency:'RUB', то есть база — рубли).
+  // Стоимость позиции считается в валюте ИНСТРУМЕНТА (currentPrice.currency), а
+  // знаменатель весов totalValue — в базовой валюте. Смешивать их нельзя: для
+  // инвалютных позиций (замещающие облигации в USD, ГДР) вес value(USD)/
+  // totalValue(RUB) занижен в ~курс раз, а срезы byType/bySector/byCountry
+  // складывают суммы разных валют. Курсов пересчёта в ответе GetPortfolio нет,
+  // корректно привести позиции к базовой валюте здесь невозможно. no-fallbacks:
+  // не выдаём молча заведомо неверные веса — собираем набор инвалютных валют и
+  // ниже добавляем явное предупреждение о мультивалютности портфеля.
+  const baseCurrency = currency.toLowerCase();
+  const foreignCurrencies = new Set<string>();
+
   for (const position of positions) {
     if (!position.currentPrice) {
       // Без текущей цены стоимость позиции неизвестна — в структуру не входит.
@@ -99,6 +108,12 @@ export function buildAllocationView(params: {
     }
     const value = moneyToNumber(position.currentPrice) * quotationToNumber(position.quantity);
     const details = detailsByUid.get(position.instrumentUid);
+
+    // Фиксируем валюту позиции, отличную от базовой — источник неточных весов.
+    const positionCurrency = position.currentPrice.currency.toLowerCase();
+    if (positionCurrency !== baseCurrency) {
+      foreignCurrencies.add(positionCurrency);
+    }
 
     // Подписи групп — презентация; для отсутствующих данных явные «без …»
     // (это UI-метки, а не подмена данных).
@@ -119,16 +134,28 @@ export function buildAllocationView(params: {
       concentration.push({
         ticker: position.ticker ?? position.figi,
         name: details?.name ?? null,
-        value: round2(value),
-        weightPercent: round2(weightPercent),
+        value: round(value),
+        weightPercent: round(weightPercent),
       });
     }
+  }
+
+  // K5: если в портфеле есть инвалютные позиции — веса и концентрация по ним
+  // считаются от рублёвого итога без пересчёта по курсу и потому занижены.
+  // Предупреждаем явно, а не подменяем данные молчаливым «правдоподобным» весом.
+  if (foreignCurrencies.size > 0) {
+    const foreignList = [...foreignCurrencies].map((c) => c.toUpperCase()).join(', ');
+    warnings.push(
+      `Портфель мультивалютный (кроме базовой ${baseCurrency.toUpperCase()} есть позиции в ${foreignList}). ` +
+        'Веса и концентрация по нерублёвым позициям неточны и занижены: их стоимость учтена в собственной ' +
+        'валюте, а знаменатель — рублёвый итог портфеля; курсов пересчёта в ответе GetPortfolio нет.',
+    );
   }
 
   concentration.sort((a, b) => b.weightPercent - a.weightPercent);
   return {
     accountId,
-    totalValue: round2(totalValue),
+    totalValue: round(totalValue),
     currency,
     byType: toSlices(byType, totalValue),
     bySector: toSlices(bySector, totalValue),

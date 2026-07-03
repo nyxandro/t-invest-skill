@@ -8,7 +8,7 @@ import {
   findShareFixture,
   fundamentalsResponseFixture,
 } from '../api/mocks/analytics.fixture.js';
-import { fetchFundamentals } from './fundamentals.js';
+import { fetchFundamentals, renderFundamentals } from './fundamentals.js';
 
 function apiWith(overrides: Partial<Parameters<typeof fetchFundamentals>[0]> = {}) {
   return {
@@ -32,6 +32,25 @@ describe('fetchFundamentals', () => {
     // Поля, которых нет в фикстуре (protobuf опускает нули) → null, не 0.
     expect(view.profitability.roic).toBeNull();
     expect(view.debt.netDebtToEbitda).toBeNull();
+  });
+
+  it('нулевой коэффициент = «нет данных» → null и прочерк (единая семантика с screen-shares, K42)', async () => {
+    // REST-шлюз опускает нулевые double: 0 у коэффициента неотличим от отсутствия.
+    // Раньше fundamentals сохранял буквальный 0 («P/E 0.00»), а screen-shares
+    // трактовал 0 как отсутствие — теперь трактовка единая.
+    const view = await fetchFundamentals(
+      apiWith({
+        getAssetFundamentals: async () => ({
+          fundamentals: [{ assetUid: 'asset-uid-share', currency: 'rub', peRatioTtm: 0 }],
+        }),
+      }),
+      'TSTR',
+    );
+
+    expect(view.valuation.peRatioTtm).toBeNull();
+    const rendered = renderFundamentals(view);
+    expect(rendered).toContain('P/E: —');
+    expect(rendered).not.toContain('P/E: 0.00');
   });
 
   it('без assetUid в карточке — APP_TINVEST_FUNDAMENTALS_UNAVAILABLE', async () => {

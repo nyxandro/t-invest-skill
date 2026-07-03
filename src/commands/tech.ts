@@ -10,7 +10,7 @@
  * - fetchTech(api, query, now) — загрузка индикаторов + сборка;
  * - renderTech(view) — человекочитаемый вывод.
  */
-import { quotationToNumber, formatAmount } from '../api/money.js';
+import { quotationToNumber, formatAmount, round } from '../api/money.js';
 import type { GetLastPricesResponse } from '../api/types.js';
 import type { GetTechAnalysisResponse, TechAnalysisRequest } from '../api/types-market.js';
 import {
@@ -23,10 +23,12 @@ import {
   MACD_SLOW,
   MACD_SIGNAL,
   TECH_LOOKBACK_DAYS,
+  MS_PER_DAY,
 } from '../config/config.js';
-import { resolveInstrument, type InstrumentSearchApi } from './resolve-instrument.js';
+import { DASH } from '../format/values.js';
+import { resolveMarketInstrument, type MarketInstrumentApi } from './resolve-instrument.js';
 
-export interface TechApi extends InstrumentSearchApi {
+export interface TechApi extends MarketInstrumentApi {
   getTechAnalysis(request: TechAnalysisRequest): Promise<GetTechAnalysisResponse>;
   getLastPrices(instrumentIds: string[]): Promise<GetLastPricesResponse>;
 }
@@ -43,10 +45,6 @@ export interface TechView {
   observations: string[]; // нейтральные наблюдения, не торговые указания
 }
 
-function round2(value: number): number {
-  return Math.round(value * 100) / 100;
-}
-
 // Последнее значение индикатора из ответа API (поле зависит от типа).
 function lastValue(
   resp: GetTechAnalysisResponse,
@@ -56,7 +54,7 @@ function lastValue(
   for (let i = values.length - 1; i >= 0; i -= 1) {
     const quotation = values[i]![field];
     if (quotation) {
-      return round2(quotationToNumber(quotation));
+      return round(quotationToNumber(quotation));
     }
   }
   return null;
@@ -118,10 +116,10 @@ export function buildTechView(params: {
   };
 }
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
 export async function fetchTech(api: TechApi, query: string, now: Date): Promise<TechView> {
-  const instrument = await resolveInstrument(api, query);
+  // Общий рыночный резолвер: тикер/ISIN, а для индексов (IMOEX/RTSI) — fallback
+  // на индикативы, чтобы tech работал по индексам единообразно с history (K44).
+  const instrument = await resolveMarketInstrument(api, query);
   const from = new Date(now.getTime() - TECH_LOOKBACK_DAYS * MS_PER_DAY).toISOString();
   const to = now.toISOString();
   const base = {
@@ -149,7 +147,7 @@ export async function fetchTech(api: TechApi, query: string, now: Date): Promise
   return buildTechView({
     ticker: instrument.ticker,
     name: instrument.name,
-    lastPrice: lastPriceQuotation ? round2(quotationToNumber(lastPriceQuotation)) : null,
+    lastPrice: lastPriceQuotation ? round(quotationToNumber(lastPriceQuotation)) : null,
     rsiResp,
     smaFastResp,
     smaSlowResp,
@@ -158,8 +156,7 @@ export async function fetchTech(api: TechApi, query: string, now: Date): Promise
 }
 
 export function renderTech(view: TechView): string {
-  const dash = '—';
-  const value = (v: number | null): string => (v !== null ? formatAmount(v) : dash);
+  const value = (v: number | null): string => (v !== null ? formatAmount(v) : DASH);
   const lines = [
     `${view.ticker} — ${view.name} (дневные индикаторы)`,
     `Цена: ${value(view.lastPrice)}`,

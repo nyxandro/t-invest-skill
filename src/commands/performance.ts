@@ -16,10 +16,11 @@
  * - renderPerformance(view) — человекочитаемый отчёт.
  */
 import { AppError } from '../api/errors.js';
-import { formatAmount, formatSigned, moneyToNumber } from '../api/money.js';
+import { formatAmount, formatSigned, moneyToNumber, round } from '../api/money.js';
 import type { GetAccountsResponse, OperationItem, PortfolioResponse } from '../api/types.js';
 import { computeXirrPercent, type CashFlow } from '../analytics/xirr.js';
 import { EXTREME_XIRR_WARN_PERCENT } from '../config/config.js';
+import { DASH } from '../format/values.js';
 import { fetchAllOperationItems, type OperationsCursorApi } from './operations.js';
 import { resolveAccountId, type AccountsApi } from './resolve-account.js';
 
@@ -67,11 +68,27 @@ export function classifyOperationType(type: string | null): OperationBucket {
   if (type.startsWith('OPERATION_TYPE_OUTPUT')) {
     return 'output';
   }
-  if (type === 'OPERATION_TYPE_BUY' || type === 'OPERATION_TYPE_SELL' || type.includes('BUY') || type.includes('SELL')) {
+  // includes уже покрывает точные OPERATION_TYPE_BUY/SELL и вариации
+  // (например, ..._BUY_CARD, ..._SELL_MARGIN) — отдельные exact-сравнения избыточны.
+  if (type.includes('BUY') || type.includes('SELL')) {
     return 'trade';
   }
   return 'other';
 }
+
+// Денежные корзины: для них отсутствие payment означает потерю ДЕНЕЖНЫХ данных
+// (искажение invested/withdrawn/XIRR или разбивки), а не техническую запись.
+// 'other' и 'securities-transfer' сюда не входят: первое — записи без денежного
+// эффекта, второе обрабатывается отдельным предупреждением о переводах бумаг.
+const MONETARY_BUCKETS: ReadonlySet<OperationBucket> = new Set([
+  'input',
+  'output',
+  'dividend',
+  'coupon',
+  'commission',
+  'tax',
+  'trade',
+]);
 
 export interface PerformanceView {
   accountId: string;
@@ -94,11 +111,6 @@ export interface PerformanceView {
   warnings: string[];
 }
 
-// Округление представления до копеек (расчёты идут в полной точности).
-function round2(value: number): number {
-  return Math.round(value * 100) / 100;
-}
-
 export function buildPerformanceView(params: {
   accountId: string;
   from: string;
@@ -115,6 +127,7 @@ export function buildPerformanceView(params: {
   const breakdown = { dividends: 0, coupons: 0, commissions: 0, taxes: 0 };
   const skippedCurrencies = new Set<string>();
   let hasSecuritiesTransfer = false;
+  let skippedNoPayment = 0; // денежные операции без payment (K18: не теряем молча)
 
   for (const op of items) {
     const bucket = classifyOperationType(op.type ?? null);
@@ -123,7 +136,12 @@ export function buildPerformanceView(params: {
       continue;
     }
     if (!op.payment) {
-      continue; // операция без денежного эффекта (тех. запись)
+      // no-fallbacks: денежную операцию без суммы платежа нельзя молча выкинуть —
+      // это исказит потоки/разбивку. Технические записи ('other') пропускаем тихо.
+      if (MONETARY_BUCKETS.has(bucket)) {
+        skippedNoPayment += 1;
+      }
+      continue;
     }
     // Расчёт ведём в рублях: валютные операции суммировать с рублёвыми нельзя.
     if (op.payment.currency !== 'rub') {
@@ -170,6 +188,12 @@ export function buildPerformanceView(params: {
         'XIRR может быть искажён.',
     );
   }
+  if (skippedNoPayment > 0) {
+    warnings.push(
+      `${skippedNoPayment} денежных операций без суммы платежа исключены из расчёта — ` +
+        'доходность может быть неполной.',
+    );
+  }
 
   // Замыкающий поток — текущая стоимость портфеля «как будто продали сегодня».
   const flowsWithFinal =
@@ -194,17 +218,17 @@ export function buildPerformanceView(params: {
     from,
     to,
     currency: 'rub',
-    invested: round2(invested),
-    withdrawn: round2(withdrawn),
-    currentValue: round2(currentValue),
-    netProfit: round2(netProfit),
-    netProfitPercent: invested > 0 ? round2((netProfit / invested) * 100) : null,
-    xirrPercent: xirrPercent !== null ? round2(xirrPercent) : null,
+    invested: round(invested),
+    withdrawn: round(withdrawn),
+    currentValue: round(currentValue),
+    netProfit: round(netProfit),
+    netProfitPercent: invested > 0 ? round((netProfit / invested) * 100) : null,
+    xirrPercent: xirrPercent !== null ? round(xirrPercent) : null,
     breakdown: {
-      dividends: round2(breakdown.dividends),
-      coupons: round2(breakdown.coupons),
-      commissions: round2(breakdown.commissions),
-      taxes: round2(breakdown.taxes),
+      dividends: round(breakdown.dividends),
+      coupons: round(breakdown.coupons),
+      commissions: round(breakdown.commissions),
+      taxes: round(breakdown.taxes),
     },
     operationsCount: items.length,
     warnings,
@@ -215,11 +239,17 @@ export async function fetchPerformance(
   api: PerformanceApi,
   params: { explicitAccountId?: string; now: Date },
 ): Promise<PerformanceView> {
-  const accountId = await resolveAccountId(api, params.explicitAccountId);
+  // K36: список счетов нужен и для выбора счёта, и для openedDate — тянем его
+  // один раз, а правила выбора (no-fallbacks) переиспользуем через resolveAccountId,
+  // отдав ему уже полученный ответ вместо повторного сетевого вызова.
+  const { accounts } = await api.getAccounts();
+  const accountId = await resolveAccountId(
+    { getAccounts: async () => ({ accounts }) },
+    params.explicitAccountId,
+  );
 
   // Дата открытия счёта — обязательная точка отсчёта: без неё XIRR по части
   // истории даст ложную цифру (начальная стоимость портфеля неизвестна).
-  const { accounts } = await api.getAccounts();
   const account = accounts.find((a) => a.id === accountId);
   if (!account?.openedDate) {
     throw new AppError({
@@ -231,8 +261,11 @@ export async function fetchPerformance(
 
   const from = new Date(account.openedDate).toISOString();
   const to = params.now.toISOString();
-  const items = await fetchAllOperationItems(api, { accountId, from, to });
-  const portfolio = await api.getPortfolio(accountId);
+  // Операции и портфель независимы — грузим параллельно (K36).
+  const [items, portfolio] = await Promise.all([
+    fetchAllOperationItems(api, { accountId, from, to }),
+    api.getPortfolio(accountId),
+  ]);
   return buildPerformanceView({
     accountId,
     from,
@@ -253,7 +286,7 @@ export function renderPerformance(view: PerformanceView): string {
     `Текущая стоимость:        ${formatAmount(view.currentValue)} RUB`,
     `Чистый результат:         ${formatSigned(view.netProfit)} RUB` +
       (view.netProfitPercent !== null ? ` (${formatSigned(view.netProfitPercent)} % к вложенному)` : ''),
-    `Годовая доходность XIRR:  ${view.xirrPercent !== null ? `${formatSigned(view.xirrPercent)} %` : '—'}`,
+    `Годовая доходность XIRR:  ${view.xirrPercent !== null ? `${formatSigned(view.xirrPercent)} %` : DASH}`,
     '',
     'За период получено/уплачено:',
     `  Дивиденды: ${formatSigned(view.breakdown.dividends)}`,

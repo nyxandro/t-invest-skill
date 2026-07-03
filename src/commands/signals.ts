@@ -11,11 +11,13 @@
  * - fetchStrategies(api) — список стратегий;
  * - renderSignals(views) / renderStrategies(views) — вывод.
  */
-import { quotationToNumber, formatAmount } from '../api/money.js';
+import { formatAmount, quotationToNumberOrNull, round } from '../api/money.js';
 import type { GetSignalsResponse, GetStrategiesResponse, Signal } from '../api/types-info.js';
 import { loadCatalog, type CatalogApi } from '../catalog/instrument-catalog.js';
 import { SIGNALS_DEFAULT_LIMIT, type TInvestMode } from '../config/config.js';
+import { directionLabel } from '../format/direction.js';
 import { renderTable } from '../format/table.js';
+import { DASH, moneyOrDash } from '../format/values.js';
 import { resolveInstrument, type InstrumentSearchApi } from './resolve-instrument.js';
 
 export interface SignalsApi extends InstrumentSearchApi, CatalogApi {
@@ -53,24 +55,23 @@ export interface StrategyView {
   totalSignals: number | null;
 }
 
-function round2(value: number): number {
-  return Math.round(value * 100) / 100;
-}
-
 export function buildSignalViews(
   signals: Signal[],
   instrumentsByUid: ReadonlyMap<string, { ticker: string; name: string }>,
 ): SignalView[] {
   return signals.map((signal): SignalView => {
     const instrument = signal.instrumentUid ? instrumentsByUid.get(signal.instrumentUid) : undefined;
-    const initialPrice = signal.initialPrice ? quotationToNumber(signal.initialPrice) : null;
-    const targetPrice = signal.targetPrice ? quotationToNumber(signal.targetPrice) : null;
+    // Опущенные protobuf-JSON message-поля цен → null.
+    const initialPrice = quotationToNumberOrNull(signal.initialPrice);
+    const targetPrice = quotationToNumberOrNull(signal.targetPrice);
     return {
       signalId: signal.signalId,
       strategyName: signal.strategyName ?? null,
       ticker: instrument?.ticker ?? null,
       instrumentName: instrument?.name ?? null,
       instrumentUid: signal.instrumentUid ?? null,
+      // Направление сигнала — собственный enum SIGNAL_DIRECTION_* (не order/stop),
+      // поэтому маппинг локальный; на неизвестное значение честно null.
       direction:
         signal.direction === 'SIGNAL_DIRECTION_BUY'
           ? 'buy'
@@ -84,7 +85,7 @@ export function buildSignalViews(
       targetPrice,
       potentialPercent:
         initialPrice !== null && initialPrice !== 0 && targetPrice !== null
-          ? round2((targetPrice / initialPrice - 1) * 100)
+          ? round((targetPrice / initialPrice - 1) * 100)
           : null,
       probability: signal.probability ?? null,
     };
@@ -93,7 +94,14 @@ export function buildSignalViews(
 
 export async function fetchSignals(
   api: SignalsApi,
-  params: { mode: TInvestMode; now: Date; strategyId?: string; ticker?: string; limit?: number },
+  params: {
+    mode: TInvestMode;
+    now: Date;
+    strategyId?: string;
+    ticker?: string;
+    limit?: number;
+    cacheDir?: string;
+  },
 ): Promise<SignalView[]> {
   // Фильтр по бумаге — через точный резолв тикера.
   const instrumentUid = params.ticker
@@ -106,11 +114,22 @@ export async function fetchSignals(
     limit: params.limit ?? SIGNALS_DEFAULT_LIMIT,
   });
   const signals = resp.signals ?? [];
+  // Нет сигналов — справочники (мегабайты данных) не нужны: ранний выход,
+  // ни одной загрузки каталога.
+  if (signals.length === 0) {
+    return [];
+  }
 
   // Имена бумаг — из кэшируемых справочников (без запроса на каждый сигнал).
+  // Сигнал не несёт вид инструмента, поэтому нужны все три справочника; грузим
+  // их параллельно (независимые запросы), а не последовательно в цикле.
+  const catalogs = await Promise.all(
+    (['shares', 'bonds', 'etfs'] as const).map((kind) =>
+      loadCatalog(api, kind, params.mode, params.now, params.cacheDir),
+    ),
+  );
   const instrumentsByUid = new Map<string, { ticker: string; name: string }>();
-  for (const kind of ['shares', 'bonds', 'etfs'] as const) {
-    const catalog = await loadCatalog(api, kind, params.mode, params.now);
+  for (const catalog of catalogs) {
     for (const item of catalog.items) {
       instrumentsByUid.set(item.uid, { ticker: item.ticker, name: item.name });
     }
@@ -139,17 +158,17 @@ export function renderSignals(views: SignalView[]): string {
   if (views.length === 0) {
     return 'Активных сигналов по заданным фильтрам нет.';
   }
-  const dash = '—';
   return renderTable(
     ['Бумага', 'Напр.', 'Стратегия', 'Цель', 'Потенциал', 'Вероятн.', 'До'],
     views.map((v) => [
-      v.ticker ?? v.instrumentUid?.slice(0, 8) ?? dash,
-      v.direction === 'buy' ? 'покупка' : v.direction === 'sell' ? 'продажа' : dash,
-      v.strategyName ?? dash,
-      v.targetPrice !== null ? formatAmount(v.targetPrice) : dash,
-      v.potentialPercent !== null ? `${formatAmount(v.potentialPercent, 1)} %` : dash,
-      v.probability !== null ? `${v.probability} %` : dash,
-      v.endsAt ?? dash,
+      v.ticker ?? v.instrumentUid?.slice(0, 8) ?? DASH,
+      directionLabel(v.direction),
+      v.strategyName ?? DASH,
+      moneyOrDash(v.targetPrice),
+      // Потенциал — с суффиксом « %» через пробел, поэтому не percentOrDash.
+      v.potentialPercent !== null ? `${formatAmount(v.potentialPercent, 1)} %` : DASH,
+      v.probability !== null ? `${v.probability} %` : DASH,
+      v.endsAt ?? DASH,
     ]),
   );
 }
@@ -158,11 +177,10 @@ export function renderStrategies(views: StrategyView[]): string {
   if (views.length === 0) {
     return 'Стратегии недоступны.';
   }
-  const dash = '—';
   const lines: string[] = [];
   for (const s of views) {
     lines.push(
-      `• ${s.name ?? s.strategyId} [${s.type ?? dash}] — активных сигналов: ${s.activeSignals ?? 0}`,
+      `• ${s.name ?? s.strategyId} [${s.type ?? DASH}] — активных сигналов: ${s.activeSignals ?? 0}`,
     );
   }
   return lines.join('\n');

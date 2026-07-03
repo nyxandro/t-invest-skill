@@ -1,102 +1,84 @@
 /**
- * Команда quote: последняя цена инструмента по точному тикеру.
+ * Команда quote: последняя цена инструмента по тикеру или ISIN (и индексам).
  *
  * Экспорты:
  * - MarketApi — контракт клиента для команды;
  * - QuoteView — представление котировки;
- * - getQuotes(api, tickerQuery) — поиск по точному тикеру + последние цены;
+ * - getQuotes(api, query) — резолв одного инструмента + последняя цена;
  * - renderQuotes(views) — таблица для вывода.
  *
- * Семантика: quote работает только по точному тикеру (SBER, GAZP).
- * Для поиска по названию есть отдельная команда search — здесь ничего
- * не угадываем (no-fallbacks).
+ * Семантика: quote работает по точному тикеру ИЛИ ISIN (а для индексов —
+ * IMOEX/RTSI — через индикативы). Разрешение имени делегировано общему
+ * resolveMarketInstrument, чтобы не дублировать матчинг (K26/K44). Для поиска
+ * по названию есть отдельная команда search — здесь ничего не угадываем.
  */
-import { AppError } from '../api/errors.js';
-import { formatAmount, quotationToNumber } from '../api/money.js';
-import type { FindInstrumentResponse, GetLastPricesResponse } from '../api/types.js';
+import { formatAmount, quotationToNumberOrNull } from '../api/money.js';
+import type { GetLastPricesResponse } from '../api/types.js';
+import { formatMoscowDateTime } from '../format/datetime.js';
 import { renderTable } from '../format/table.js';
+import { DASH } from '../format/values.js';
+import { resolveMarketInstrument, type MarketInstrumentApi } from './resolve-instrument.js';
 
-export interface MarketApi {
-  findInstrument(query: string): Promise<FindInstrumentResponse>;
+export interface MarketApi extends MarketInstrumentApi {
   getLastPrices(instrumentIds: string[]): Promise<GetLastPricesResponse>;
 }
 
 export interface QuoteView {
   ticker: string;
   name: string;
-  classCode: string;
-  instrumentType: string;
+  classCode: string | null;
+  instrumentType: string | null;
   uid: string;
-  figi: string;
+  figi: string | null;
   currency: string | null;
   lot: number | null;
-  price: number;
+  price: number | null; // null — торгов нет / цена недоступна (НЕ 0)
   time: string | null;
 }
 
-export async function getQuotes(api: MarketApi, tickerQuery: string): Promise<QuoteView[]> {
-  const { instruments } = await api.findInstrument(tickerQuery);
+export async function getQuotes(api: MarketApi, query: string): Promise<QuoteView[]> {
+  // Единый рыночный резолвер: точный тикер/ISIN, а для индексов (IMOEX/RTSI)
+  // — fallback на индикативы. Так quote работает и по ISIN, и по индексам,
+  // не переизобретая матчинг только по тикеру (это и был баг K26).
+  const instrument = await resolveMarketInstrument(api, query);
 
-  // Точное совпадение тикера без учёта регистра; допускаем несколько
-  // совпадений (один тикер на разных площадках) — покажем все.
-  const normalized = tickerQuery.trim().toUpperCase();
-  const exact = instruments.filter((i) => i.ticker.toUpperCase() === normalized);
-  if (exact.length === 0) {
-    throw new AppError({
-      code: 'APP_TINVEST_INSTRUMENT_NOT_FOUND',
-      userMessage: `Инструмент с тикером «${tickerQuery}» не найден. Попробуйте поиск по названию: tinvest search "${tickerQuery}".`,
-    });
-  }
+  // Последняя цена по одному инструменту. Может отсутствовать (торги не идут):
+  // quotationToNumberOrNull вернёт null, а НЕ 0 — важно не показать «нулевую
+  // цену» там, где цены попросту нет (ловушка protobuf-JSON: поле опускается).
+  const { lastPrices } = await api.getLastPrices([instrument.uid]);
+  const lastPrice = lastPrices.find((p) => p.instrumentUid === instrument.uid);
+  const price = quotationToNumberOrNull(lastPrice?.price);
 
-  const { lastPrices } = await api.getLastPrices(exact.map((i) => i.uid));
-  const priceByUid = new Map(lastPrices.map((p) => [p.instrumentUid, p]));
-
-  // Инструменты без котировки пропускаем; если цены нет ни у одного —
-  // это явная ошибка, а не пустой «успешный» ответ. ВАЖНО: когда торги
-  // не идут, запись в lastPrices приходит вовсе БЕЗ поля price (protobuf
-  // JSON опускает незаполненные поля) — такая запись равна отсутствию цены.
-  const views = exact.flatMap((i): QuoteView[] => {
-    const lastPrice = priceByUid.get(i.uid);
-    if (!lastPrice?.price) {
-      return [];
-    }
-    return [
-      {
-        ticker: i.ticker,
-        name: i.name,
-        classCode: i.classCode,
-        instrumentType: i.instrumentType,
-        uid: i.uid,
-        figi: i.figi,
-        currency: i.currency ?? null,
-        lot: i.lot ?? null,
-        price: quotationToNumber(lastPrice.price),
-        time: lastPrice.time ?? null,
-      },
-    ];
-  });
-
-  if (views.length === 0) {
-    throw new AppError({
-      code: 'APP_TINVEST_PRICE_UNAVAILABLE',
-      userMessage: `Не удалось получить котировку для «${tickerQuery}». Возможно, торги по инструменту сейчас не идут.`,
-    });
-  }
-  return views;
+  // Всегда возвращаем строку представления: даже без цены пользователю полезно
+  // видеть, что инструмент найден, а цена — прочерк (нет торгов), не ошибка.
+  // Возвращаем массив (один элемент) — контракт renderQuotes/CLI не меняем.
+  return [
+    {
+      ticker: instrument.ticker,
+      name: instrument.name,
+      classCode: instrument.classCode,
+      instrumentType: instrument.instrumentType,
+      uid: instrument.uid,
+      figi: instrument.figi,
+      currency: instrument.currency,
+      lot: instrument.lot,
+      price,
+      time: lastPrice?.time ?? null,
+    },
+  ];
 }
 
 export function renderQuotes(views: QuoteView[]): string {
-  const dash = '—';
   return renderTable(
     ['Тикер', 'Название', 'Цена', 'Валюта', 'Лот', 'Класс', 'Время'],
     views.map((v) => [
       v.ticker,
       v.name,
-      formatAmount(v.price),
-      v.currency ? v.currency.toUpperCase() : dash,
-      v.lot !== null ? String(v.lot) : dash,
-      v.classCode,
-      v.time !== null ? v.time.slice(0, 16).replace('T', ' ') : dash,
+      v.price !== null ? formatAmount(v.price) : DASH,
+      v.currency ? v.currency.toUpperCase() : DASH,
+      v.lot !== null ? String(v.lot) : DASH,
+      v.classCode ?? DASH,
+      v.time !== null ? formatMoscowDateTime(v.time) : DASH,
     ]),
   );
 }

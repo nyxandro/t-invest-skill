@@ -55,6 +55,41 @@ describe('fetchDividends', () => {
     expect(view.ttmSum).toBeCloseTo(33, 6);
   });
 
+  it('дивиденды в USD при рублёвой цене — доходность не считается, есть предупреждение', async () => {
+    // ГДР-подобный кейс: выплата в USD в пределах TTM-окна, а котировка
+    // инструмента (findShareFixture) — в рублях. Сумму выплат посчитать можно
+    // (валюты выплат между собой единообразны), но доходность к рублёвой цене —
+    // нет: делить USD на RUB без курса нельзя (K6, no-fallbacks).
+    const usdDividends = {
+      dividends: [
+        {
+          dividendNet: { units: '2', nano: 0, currency: 'usd' },
+          recordDate: '2025-07-10T00:00:00Z',
+          paymentDate: '2025-07-24T00:00:00Z',
+          dividendType: 'Regular Cash',
+          regularity: 'Annual',
+        },
+      ],
+    };
+    const view = await fetchDividends(
+      apiWith({ getDividends: async () => usdDividends }),
+      'TSTR',
+      NOW_FIXTURE,
+    );
+
+    expect(view.ttmSum).toBeCloseTo(2, 6);
+    // Доходность не рассчитана из-за расхождения валют.
+    expect(view.ttmYieldPercent).toBeNull();
+    expect(view.warnings.some((w) => w.includes('USD') && w.includes('RUB'))).toBe(true);
+  });
+
+  it('дивиденды и цена в одной валюте — предупреждения о валютах нет', async () => {
+    // Базовый рублёвый кейс не должен ложно срабатывать на расхождение валют.
+    const view = await fetchDividends(apiWith(), 'TSTR', NOW_FIXTURE);
+    expect(view.warnings).toHaveLength(0);
+    expect(view.ttmYieldPercent).toBeCloseTo(11, 4);
+  });
+
   it('пустая история — валидный ответ с нулём выплат и null-метриками', async () => {
     const view = await fetchDividends(
       apiWith({ getDividends: async () => ({}) }),

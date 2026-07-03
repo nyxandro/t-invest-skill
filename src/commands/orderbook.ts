@@ -9,12 +9,13 @@
  * - fetchOrderBook(api, query, depth) — резолв + загрузка + сборка;
  * - renderOrderBook(view) — человекочитаемый вывод.
  */
-import { quotationToNumber, formatAmount } from '../api/money.js';
+import { quotationToNumber, formatAmount, round } from '../api/money.js';
 import type { GetOrderBookResponse, OrderBookEntry } from '../api/types-market.js';
 import { renderTable } from '../format/table.js';
-import { resolveInstrument, type InstrumentSearchApi } from './resolve-instrument.js';
+import { DASH } from '../format/values.js';
+import { resolveMarketInstrument, type MarketInstrumentApi } from './resolve-instrument.js';
 
-export interface OrderBookApi extends InstrumentSearchApi {
+export interface OrderBookApi extends MarketInstrumentApi {
   getOrderBook(instrumentId: string, depth: number): Promise<GetOrderBookResponse>;
 }
 
@@ -45,10 +46,6 @@ function toLevels(entries: OrderBookEntry[] | undefined): OrderBookLevelView[] {
     .map((e) => ({ price: quotationToNumber(e.price!), quantity: Number(e.quantity) }));
 }
 
-function round4(value: number): number {
-  return Math.round(value * 10000) / 10000;
-}
-
 export function buildOrderBookView(params: {
   ticker: string;
   name: string;
@@ -61,7 +58,7 @@ export function buildOrderBookView(params: {
   // Спред к середине: стандартная мера издержек немедленной сделки.
   const spreadPercent =
     bestBid !== null && bestAsk !== null && bestBid + bestAsk > 0
-      ? round4(((bestAsk - bestBid) / ((bestAsk + bestBid) / 2)) * 100)
+      ? round(((bestAsk - bestBid) / ((bestAsk + bestBid) / 2)) * 100, 4)
       : null;
   return {
     ticker: params.ticker,
@@ -85,16 +82,17 @@ export async function fetchOrderBook(
   query: string,
   depth: number,
 ): Promise<OrderBookView> {
-  const instrument = await resolveInstrument(api, query);
+  // Общий рыночный резолвер: тикер/ISIN, а для индексов — fallback на
+  // индикативы (K44). У индексов стакана нет — API вернёт пустой, покажем это.
+  const instrument = await resolveMarketInstrument(api, query);
   const resp = await api.getOrderBook(instrument.uid, depth);
   return buildOrderBookView({ ticker: instrument.ticker, name: instrument.name, resp });
 }
 
 export function renderOrderBook(view: OrderBookView): string {
-  const dash = '—';
   const lines = [
     `${view.ticker} — ${view.name} (стакан, глубина ${view.depth})`,
-    `Лучшая покупка/продажа: ${view.bestBid !== null ? formatAmount(view.bestBid) : dash} / ${view.bestAsk !== null ? formatAmount(view.bestAsk) : dash}` +
+    `Лучшая покупка/продажа: ${view.bestBid !== null ? formatAmount(view.bestBid) : DASH} / ${view.bestAsk !== null ? formatAmount(view.bestAsk) : DASH}` +
       (view.spreadPercent !== null ? ` | спред ${formatAmount(view.spreadPercent, 3)} %` : ''),
     `Объём в стакане (лоты): покупка ${formatAmount(view.bidVolume, 0)} | продажа ${formatAmount(view.askVolume, 0)}`,
     '',

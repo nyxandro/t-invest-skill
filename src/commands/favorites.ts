@@ -9,10 +9,11 @@
  * - fetchFavorites(api) — загрузка + цены батчем;
  * - renderFavorites(views) — человекочитаемый вывод.
  */
-import { quotationToNumber, formatAmount } from '../api/money.js';
+import { quotationToNumberOrNull } from '../api/money.js';
 import type { GetLastPricesResponse, LastPrice } from '../api/types.js';
 import type { FavoriteInstrument, GetFavoritesResponse } from '../api/types-info.js';
 import { renderTable } from '../format/table.js';
+import { DASH, moneyOrDash } from '../format/values.js';
 
 export interface FavoritesApi {
   getFavorites(): Promise<GetFavoritesResponse>;
@@ -34,13 +35,14 @@ export function buildFavoriteViews(
 ): FavoriteView[] {
   const priceByUid = new Map(prices.map((p) => [p.instrumentUid, p]));
   return instruments.map((instrument): FavoriteView => {
+    // Опущенный protobuf-JSON price → null (внебиржа/торги не идут).
     const price = priceByUid.get(instrument.uid)?.price;
     return {
       uid: instrument.uid,
       ticker: instrument.ticker ?? null,
       name: instrument.name ?? null,
       instrumentType: instrument.instrumentType ?? null,
-      lastPrice: price ? quotationToNumber(price) : null,
+      lastPrice: quotationToNumberOrNull(price),
       apiTradeAvailable: instrument.apiTradeAvailableFlag ?? null,
     };
   });
@@ -61,15 +63,14 @@ export function renderFavorites(views: FavoriteView[]): string {
   if (views.length === 0) {
     return 'Список избранного пуст.';
   }
-  const dash = '—';
   const table = renderTable(
     ['Тикер', 'Название', 'Тип', 'Цена', 'Через API'],
     views.map((v) => [
-      v.ticker ?? dash,
-      v.name ?? dash,
-      v.instrumentType ?? dash,
-      v.lastPrice !== null ? formatAmount(v.lastPrice) : dash,
-      v.apiTradeAvailable === null ? dash : v.apiTradeAvailable ? 'да' : 'нет',
+      v.ticker ?? DASH,
+      v.name ?? DASH,
+      v.instrumentType ?? DASH,
+      moneyOrDash(v.lastPrice),
+      v.apiTradeAvailable === null ? DASH : v.apiTradeAvailable ? 'да' : 'нет',
     ]),
   );
   return `Избранное (${views.length}):\n${table}`;

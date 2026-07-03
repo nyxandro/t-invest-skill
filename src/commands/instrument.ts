@@ -11,7 +11,7 @@
  *   (+ гарантийное обеспечение для фьючерса);
  * - renderInstrumentCard(view) — человекочитаемый вывод.
  */
-import { moneyToNumber, quotationToNumber, formatAmount } from '../api/money.js';
+import { moneyToNumberOrNull, quotationToNumberOrNull } from '../api/money.js';
 import type {
   GetInstrumentByResponse,
   GetLastPricesResponse,
@@ -19,6 +19,7 @@ import type {
   LastPrice,
 } from '../api/types.js';
 import type { GetFuturesMarginResponse, GetTradingStatusResponse } from '../api/types-market.js';
+import { DASH, moneyOrDash } from '../format/values.js';
 import { resolveInstrument, type InstrumentSearchApi } from './resolve-instrument.js';
 
 export interface InstrumentCardApi extends InstrumentSearchApi {
@@ -87,25 +88,18 @@ export function buildInstrumentCard(params: {
     currency: details.currency ?? null,
     exchange: details.exchange ?? null,
     countryOfRisk: details.countryOfRiskName ?? details.countryOfRisk ?? null,
-    lastPrice: lastPrice?.price ? quotationToNumber(lastPrice.price) : null,
+    // Опущенные protobuf-JSON message-поля → null (цена без торгов и т.п.).
+    lastPrice: quotationToNumberOrNull(lastPrice?.price),
     tradingStatus: statusEnum,
     tradingStatusText: statusEnum ? TRADING_STATUS_LABELS[statusEnum] ?? statusEnum : null,
     apiTradeAvailable: status.apiTradeAvailableFlag ?? details.apiTradeAvailableFlag ?? null,
     forQualInvestor: details.forQualInvestorFlag ?? null,
     futuresMargin: futuresMargin
       ? {
-          initialMarginOnBuy: futuresMargin.initialMarginOnBuy
-            ? moneyToNumber(futuresMargin.initialMarginOnBuy)
-            : null,
-          initialMarginOnSell: futuresMargin.initialMarginOnSell
-            ? moneyToNumber(futuresMargin.initialMarginOnSell)
-            : null,
-          minPriceIncrement: futuresMargin.minPriceIncrement
-            ? quotationToNumber(futuresMargin.minPriceIncrement)
-            : null,
-          minPriceIncrementAmount: futuresMargin.minPriceIncrementAmount
-            ? quotationToNumber(futuresMargin.minPriceIncrementAmount)
-            : null,
+          initialMarginOnBuy: moneyToNumberOrNull(futuresMargin.initialMarginOnBuy),
+          initialMarginOnSell: moneyToNumberOrNull(futuresMargin.initialMarginOnSell),
+          minPriceIncrement: quotationToNumberOrNull(futuresMargin.minPriceIncrement),
+          minPriceIncrementAmount: quotationToNumberOrNull(futuresMargin.minPriceIncrementAmount),
         }
       : null,
   };
@@ -133,21 +127,22 @@ export async function fetchInstrumentCard(
 }
 
 export function renderInstrumentCard(view: InstrumentCardView): string {
-  const dash = '—';
   const lines = [
-    `${view.ticker ?? dash} — ${view.name}`,
-    `Тип: ${view.instrumentType ?? dash} | ISIN: ${view.isin ?? dash} | Биржа: ${view.exchange ?? dash}`,
-    `Страна риска: ${view.countryOfRisk ?? dash} | Валюта: ${view.currency?.toUpperCase() ?? dash} | Лот: ${view.lot ?? dash}`,
-    `Последняя цена: ${view.lastPrice !== null ? formatAmount(view.lastPrice) : dash}`,
-    `Статус торгов: ${view.tradingStatusText ?? dash}`,
-    `Доступен через API: ${view.apiTradeAvailable === null ? dash : view.apiTradeAvailable ? 'да' : 'нет'}` +
+    `${view.ticker ?? DASH} — ${view.name}`,
+    `Тип: ${view.instrumentType ?? DASH} | ISIN: ${view.isin ?? DASH} | Биржа: ${view.exchange ?? DASH}`,
+    `Страна риска: ${view.countryOfRisk ?? DASH} | Валюта: ${view.currency?.toUpperCase() ?? DASH} | Лот: ${view.lot ?? DASH}`,
+    `Последняя цена: ${moneyOrDash(view.lastPrice)}`,
+    `Статус торгов: ${view.tradingStatusText ?? DASH}`,
+    `Доступен через API: ${view.apiTradeAvailable === null ? DASH : view.apiTradeAvailable ? 'да' : 'нет'}` +
       (view.forQualInvestor ? ' | только для квалифицированных инвесторов' : ''),
   ];
   if (view.futuresMargin) {
     const m = view.futuresMargin;
     lines.push(
-      `ГО покупка/продажа: ${m.initialMarginOnBuy !== null ? formatAmount(m.initialMarginOnBuy) : dash} / ${m.initialMarginOnSell !== null ? formatAmount(m.initialMarginOnSell) : dash}`,
-      `Шаг цены: ${m.minPriceIncrement ?? dash} (стоимость шага: ${m.minPriceIncrementAmount !== null ? formatAmount(m.minPriceIncrementAmount) : dash})`,
+      `ГО покупка/продажа: ${moneyOrDash(m.initialMarginOnBuy)} / ${moneyOrDash(m.initialMarginOnSell)}`,
+      // Шаг цены печатаем как есть (не через toFixed): дробность шага
+      // произвольна (0.01, 0.0001…) и не должна усекаться до 2 знаков.
+      `Шаг цены: ${m.minPriceIncrement ?? DASH} (стоимость шага: ${moneyOrDash(m.minPriceIncrementAmount)})`,
     );
   }
   return lines.join('\n');
