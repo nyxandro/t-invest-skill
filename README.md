@@ -1,5 +1,21 @@
 # t-invest-skill — CLI + скилл-консультант для Т-Инвестиций
 
+<p align="center">
+  <a href="https://github.com/nyxandro/t-invest-skill/raw/main/t-invest.skill"><img src="https://img.shields.io/badge/%E2%AC%87%20%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20%D1%81%D0%BA%D0%B8%D0%BB%D0%BB-t--invest.skill-2ea44f?style=for-the-badge" alt="Скачать скилл"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/%F0%9F%93%8B%20Changelog-v1.0.0-1f6feb?style=for-the-badge" alt="Changelog"></a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/%D0%B2%D0%B5%D1%80%D1%81%D0%B8%D1%8F-1.0.0-informational" alt="Версия 1.0.0">
+  <img src="https://img.shields.io/badge/%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F-MIT-brightgreen" alt="Лицензия MIT">
+  <img src="https://img.shields.io/badge/node-%E2%89%A520-339933?logo=nodedotjs&logoColor=white" alt="Node ≥ 20">
+</p>
+
+> **Скачать:** кнопка выше отдаёт `t-invest.skill` из корня репозитория (всегда
+> актуальная версия из `main`); версионированные архивы — во вкладке
+> [Releases](https://github.com/nyxandro/t-invest-skill/releases). Установка —
+> в разделе [«Подключение и работа»](#подключение-и-работа).
+
 Связка из двух частей:
 
 - **CLI `tinvest`** — полноценный инвестиционный клиент поверх
@@ -219,8 +235,10 @@ fail-fast разрешение секрета; `src/cli.ts` — commander-обв
 - Агент, умеющий читать `SKILL.md` и запускать shell-команды.
 
 ### 2. Установка
-`.skill` — это ZIP-архив. Его нужно **распаковать** в каталог скиллов, а не
-класть файлом (сам файл Claude Code не загрузит):
+Скачайте `t-invest.skill` — кнопкой в шапке или из
+[Releases](https://github.com/nyxandro/t-invest-skill/releases). Это ZIP-архив:
+его нужно **распаковать** в каталог скиллов, а не класть файлом (сам файл
+Claude Code не загрузит):
 ```bash
 unzip t-invest.skill -d ~/.claude/skills/
 # итог: ~/.claude/skills/t-invest/{SKILL.md, scripts/tinvest.cjs, references/}

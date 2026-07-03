@@ -1,6 +1,6 @@
 {
   "name": "t-invest-skill",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "CLI + Claude Code скилл для Т-Инвестиций (T-Invest API): портфель, котировки, поиск инструментов, история операций",
   "type": "module",
   "bin": {
@@ -12,6 +12,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "build:skill": "esbuild src/cli.ts --bundle --platform=node --target=node20 --format=cjs --outfile=skill/scripts/tinvest.cjs",
+    "pack:skill": "npm run build:skill && python3 scripts/pack-skill.py",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint src",
