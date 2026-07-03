@@ -2,7 +2,7 @@
  * Каркас исполнения CLI-команд: окружение, границы ошибок и общие парсеры.
  *
  * Экспорты:
- * - bootstrapEnv() — загрузка .env (текущая папка → глобальный конфиг);
+ * - bootstrapEnv() — загрузка .env ТОЛЬКО из ~/.config/tinvest/.env (детерминированно);
  * - printErrorAndExit(err) — единая граница ошибок (русское сообщение + код);
  * - runCommand(cmd, fn) — общий обработчик команды с API-клиентом:
  *   сессия → режим+токен → клиент нужного контура → бизнес-функция → вывод;
@@ -20,7 +20,6 @@ import { AppError } from '../api/errors.js';
 import {
   GLOBAL_ENV_PATH,
   baseUrlForMode,
-  hasAnyToken,
   parseMode,
   resolveModeAndToken,
   resolveTradingGate,
@@ -30,11 +29,13 @@ import {
 import { activeModeStatePath } from '../config/session-identity.js';
 import { readActiveMode, resolveCommandMode } from '../config/session.js';
 
-// Загрузка окружения: .env текущей папки, затем — только если ни один токен
-// ещё не найден — глобальный ~/.config/tinvest/.env (запуск из любой директории).
+// Загрузка окружения: .env читаем ТОЛЬКО из канонического пути
+// (~/.config/tinvest/.env), не из cwd. Так детерминированно и безопасно —
+// случайный ./.env в рабочей папке не перекроет и не скроет настроенные токены.
+// Реальные переменные окружения имеют приоритет (dotenv не перезаписывает уже
+// заданные) — штатный способ передать секреты в CI/контейнере.
 export function bootstrapEnv(): void {
-  dotenv.config({ quiet: true });
-  if (!hasAnyToken(process.env) && fs.existsSync(GLOBAL_ENV_PATH)) {
+  if (fs.existsSync(GLOBAL_ENV_PATH)) {
     dotenv.config({ path: GLOBAL_ENV_PATH, quiet: true });
   }
 }
