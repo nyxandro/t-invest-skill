@@ -20,8 +20,7 @@ import type {
   StopOrderInfo,
   StopOrderType,
 } from '../../api/types-trading.js';
-import type { TInvestMode } from '../../config/config.js';
-import type { SessionLock } from '../../config/session.js';
+import type { TInvestMode, TradingGate } from '../../config/config.js';
 import { renderTable } from '../../format/table.js';
 import { formatMoscowDate } from '../../format/datetime.js';
 import { DASH } from '../../format/values.js';
@@ -61,10 +60,10 @@ export async function placeStopOrder(
     limitPrice: number | null;
     orderId?: string; // свой ключ идемпотентности для безопасного повтора
     confirm: boolean;
-    sessionLock: SessionLock | null;
+    tradingGate: TradingGate;
   },
 ): Promise<PlacedStopOrderView> {
-  assertMutationAllowed(params.mode, params.confirm, params.sessionLock);
+  assertMutationAllowed(params.mode, params.confirm, params.tradingGate);
   // Стоп-лимит без лимитной цены не имеет смысла — явная ошибка до API.
   if (params.kind === 'stop-limit' && params.limitPrice === null) {
     throw new AppError({
@@ -151,10 +150,10 @@ export async function cancelStopOrder(
     explicitAccountId?: string;
     stopOrderId: string;
     confirm: boolean;
-    sessionLock: SessionLock | null;
+    tradingGate: TradingGate;
   },
 ): Promise<{ cancelledAt: string | null }> {
-  assertMutationAllowed(params.mode, params.confirm, params.sessionLock);
+  assertMutationAllowed(params.mode, params.confirm, params.tradingGate);
   const paths = tradingPathsForMode(params.mode);
   const accountId = await resolveAccountId(api, params.explicitAccountId);
   const resp = await api.call<CancelStopOrderResponse>(paths.cancelStopOrder, {

@@ -1,133 +1,97 @@
 /**
- * Тесты замка сессии (якорная модель): жизненный цикл, изоляция параллельных
- * сессий, PID-reuse, уборка мёртвых замков, граница режимов.
- * Работают с реальной ФС во временном каталоге — код замка честно проверяется
- * без моков файловой системы.
+ * Тесты активного режима сессии: жизненный цикл (read/write/clear), свободное
+ * переключение режима и разрешение режима команды (обязательная инициализация +
+ * запрет молчаливого расхождения с --mode). Работают на реальной ФС во
+ * временном каталоге — логика состояния проверяется без моков.
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { ProcessAnchor, ProcessProbe } from './process-anchor.js';
 import {
-  endSession,
-  enforceSessionMode,
-  assertFullAcknowledged,
-  readSessionLock,
-  sessionLockPath,
-  startSession,
-  sweepDeadSessions,
+  clearActiveMode,
+  readActiveMode,
+  resolveCommandMode,
+  writeActiveMode,
 } from './session.js';
 
 const now = new Date('2026-07-02T12:00:00Z');
-const anchorA: ProcessAnchor = { pid: 111, startTicks: '500' };
-const anchorB: ProcessAnchor = { pid: 222, startTicks: '700' };
 
-describe('session lock (якорная модель)', () => {
+describe('активный режим (файл состояния)', () => {
   let dir: string;
+  let file: string;
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tinvest-session-test-'));
+    file = path.join(dir, 'sub', 'active-mode.json');
   });
 
   afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it('start → read → end для одного якоря', () => {
-    expect(readSessionLock(dir, anchorA)).toBeNull();
-    const lock = startSession(dir, anchorA, 'sandbox', now);
-    expect(lock).toMatchObject({ mode: 'sandbox', anchor: anchorA });
-    expect(readSessionLock(dir, anchorA)).toMatchObject({ mode: 'sandbox' });
-    expect(endSession(dir, anchorA)).toBe(true);
-    expect(readSessionLock(dir, anchorA)).toBeNull();
+  it('нет файла → null; write создаёт каталог и пишет; read возвращает состояние', () => {
+    expect(readActiveMode(file)).toBeNull();
+    const state = writeActiveMode(file, 'readonly', now);
+    expect(state).toEqual({ mode: 'readonly', startedAt: now.toISOString() });
+    expect(readActiveMode(file)).toEqual({ mode: 'readonly', startedAt: now.toISOString() });
+    // Файл создан с приватными правами (личное состояние).
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
   });
 
-  it('смена режима при живом замке запрещена', () => {
-    startSession(dir, anchorA, 'sandbox', now);
-    expect(() => startSession(dir, anchorA, 'full', now)).toThrowError(
-      expect.objectContaining({ code: 'APP_TINVEST_SESSION_ACTIVE' }),
-    );
-    // Тот же режим — идемпотентно.
-    expect(() => startSession(dir, anchorA, 'sandbox', now)).not.toThrow();
+  it('смена режима — свободная перезапись', () => {
+    writeActiveMode(file, 'readonly', now);
+    writeActiveMode(file, 'sandbox', now);
+    expect(readActiveMode(file)?.mode).toBe('sandbox');
+    writeActiveMode(file, 'full', now);
+    expect(readActiveMode(file)?.mode).toBe('full');
   });
 
-  it('параллельные сессии (разные якоря) не мешают друг другу', () => {
-    startSession(dir, anchorA, 'readonly', now);
-    startSession(dir, anchorB, 'sandbox', now);
-    expect(readSessionLock(dir, anchorA)?.mode).toBe('readonly');
-    expect(readSessionLock(dir, anchorB)?.mode).toBe('sandbox');
+  it('clearActiveMode снимает фиксацию', () => {
+    writeActiveMode(file, 'sandbox', now);
+    expect(clearActiveMode(file)).toBe(true);
+    expect(readActiveMode(file)).toBeNull();
+    // Повторный clear — уже нечего снимать.
+    expect(clearActiveMode(file)).toBe(false);
   });
 
-  it('PID-reuse: замок с другим временем старта процесса отбрасывается', () => {
-    startSession(dir, anchorA, 'readonly', now);
-    // Новая сессия получила тот же PID, но процесс другой (иные тики).
-    const reusedPid: ProcessAnchor = { pid: 111, startTicks: '9999' };
-    expect(readSessionLock(dir, reusedPid)).toBeNull();
-    // Файл мёртвого замка при этом удалён.
-    expect(fs.existsSync(sessionLockPath(dir, 111))).toBe(false);
-  });
-
-  it('повреждённый файл замка текущего якоря — явная ошибка', () => {
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(sessionLockPath(dir, anchorA.pid), '{битый json');
-    expect(() => readSessionLock(dir, anchorA)).toThrowError(
+  it('битый файл состояния — явная ошибка', () => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, '{битый json');
+    expect(() => readActiveMode(file)).toThrowError(
       expect.objectContaining({ code: 'APP_TINVEST_SESSION_CORRUPT' }),
     );
   });
 
-  it('sweepDeadSessions удаляет замки умерших процессов и битые файлы', () => {
-    startSession(dir, anchorA, 'readonly', now);
-    startSession(dir, anchorB, 'sandbox', now);
-    fs.writeFileSync(sessionLockPath(dir, 333), 'мусор');
-    // Жив только якорь B.
-    // Валидная позиция starttime — 20-я после «(comm)» (см. parseStat).
-    const statTail = ['S', '1', ...Array<string>(17).fill('0'), anchorB.startTicks!, '0'].join(' ');
-    const probe: ProcessProbe = {
-      selfPid: 1,
-      readStat: (pid) => (pid === anchorB.pid ? `${pid} (x) ${statTail}` : null),
-      readCmdline: () => null,
-      isAlive: (pid) => pid === anchorB.pid,
-    };
-    // legacy-путь уводим во временный каталог — тест не касается реального HOME.
-    const removed = sweepDeadSessions(dir, probe, path.join(dir, 'legacy-session.json'));
-    expect(removed).toBe(2); // мёртвый A + битый 333
-    expect(fs.existsSync(sessionLockPath(dir, anchorA.pid))).toBe(false);
-    expect(readSessionLock(dir, anchorB)?.mode).toBe('sandbox');
-  });
-
-  it('sweep удаляет артефакт старой TTL-схемы (миграция)', () => {
-    const legacyPath = path.join(dir, 'legacy-session.json');
-    fs.writeFileSync(legacyPath, JSON.stringify({ mode: 'readonly', expiresAt: '2026-07-03' }));
-    const probe: ProcessProbe = { selfPid: 1, readStat: () => null, readCmdline: () => null, isAlive: () => false };
-    expect(sweepDeadSessions(dir, probe, legacyPath)).toBe(1);
-    expect(fs.existsSync(legacyPath)).toBe(false);
+  it('неизвестный режим в файле — явная ошибка', () => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ mode: 'prod', startedAt: now.toISOString() }));
+    expect(() => readActiveMode(file)).toThrowError(
+      expect.objectContaining({ code: 'APP_TINVEST_SESSION_CORRUPT' }),
+    );
   });
 });
 
-describe('enforceSessionMode', () => {
-  const lock = { mode: 'sandbox' as const, startedAt: now.toISOString(), anchor: anchorA };
+describe('resolveCommandMode', () => {
+  const state = { mode: 'sandbox' as const, startedAt: now.toISOString() };
 
-  it('без замка возвращает запрошенный режим', () => {
-    expect(enforceSessionMode(null, 'full')).toBe('full');
-    expect(enforceSessionMode(null, undefined)).toBeUndefined();
+  it('без активного режима — APP_TINVEST_SESSION_REQUIRED', () => {
+    expect(() => resolveCommandMode(null)).toThrowError(
+      expect.objectContaining({ code: 'APP_TINVEST_SESSION_REQUIRED' }),
+    );
+    expect(() => resolveCommandMode(null, 'readonly')).toThrowError(
+      expect.objectContaining({ code: 'APP_TINVEST_SESSION_REQUIRED' }),
+    );
   });
 
-  it('чужой режим при замке — APP_TINVEST_MODE_LOCKED', () => {
-    expect(() => enforceSessionMode(lock, 'full')).toThrowError(
-      expect.objectContaining({ code: 'APP_TINVEST_MODE_LOCKED' }),
-    );
-    expect(enforceSessionMode(lock, 'sandbox')).toBe('sandbox');
-    expect(enforceSessionMode(lock, undefined)).toBe('sandbox');
+  it('без --mode или с совпадающим --mode возвращает активный режим', () => {
+    expect(resolveCommandMode(state)).toBe('sandbox');
+    expect(resolveCommandMode(state, 'sandbox')).toBe('sandbox');
   });
-});
 
-describe('assertFullAcknowledged', () => {
-  it('full без подтверждения — ошибка; с подтверждением и для других режимов — нет', () => {
-    expect(() => assertFullAcknowledged('full', false)).toThrowError(
-      expect.objectContaining({ code: 'APP_TINVEST_FULL_ACK_REQUIRED' }),
+  it('--mode, отличный от активного, — APP_TINVEST_MODE_MISMATCH', () => {
+    expect(() => resolveCommandMode(state, 'full')).toThrowError(
+      expect.objectContaining({ code: 'APP_TINVEST_MODE_MISMATCH' }),
     );
-    expect(() => assertFullAcknowledged('full', true)).not.toThrow();
-    expect(() => assertFullAcknowledged('sandbox', false)).not.toThrow();
   });
 });

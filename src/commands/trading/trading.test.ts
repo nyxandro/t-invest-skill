@@ -1,10 +1,10 @@
 /**
- * Тесты торгового блока: предохранители режимов, сборка запросов заявок
- * (рыночная/лимитная/стоп), предпросмотр и статусы.
+ * Тесты торгового блока: предохранители режимов (лестница гейтов из окружения),
+ * сборка запросов заявок (рыночная/лимитная/стоп), предпросмотр и статусы.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GetAccountsResponse } from '../../api/types.js';
-import type { SessionLock } from '../../config/session.js';
+import type { TradingGate } from '../../config/config.js';
 import { assertMutationAllowed, tradingPathsForMode } from './paths.js';
 import {
   cancelOrder,
@@ -15,13 +15,12 @@ import {
 } from './orders.js';
 import { placeStopOrder } from './stop-orders.js';
 
-// Активный замок full-сессии — обязателен для full-мутаций (церемония
-// --acknowledge-trading). Тесты, где мутация должна пройти, передают его.
-const FULL_LOCK: SessionLock = {
-  mode: 'full',
-  startedAt: '2026-07-02T00:00:00Z',
-  anchor: { pid: 1, startTicks: '1' },
-};
+// Гейты реальных сделок из окружения (см. resolveTradingGate):
+// OFF — торговля выключена; CONFIRM — включена, нужна подпись на каждую сделку;
+// STONKS — включена без подтверждений (автономно).
+const GATE_OFF: TradingGate = { allowTrading: false, stonksMode: false };
+const GATE_CONFIRM: TradingGate = { allowTrading: true, stonksMode: false };
+const GATE_STONKS: TradingGate = { allowTrading: true, stonksMode: true };
 
 // Мутации печатают ключ идемпотентности в stderr — глушим шум в тестах.
 beforeEach(() => {
@@ -68,35 +67,33 @@ function makeApi(responses: Record<string, unknown> = {}) {
   return { api, calls };
 }
 
-describe('предохранители торговых команд', () => {
+describe('предохранители торговых команд (лестница гейтов)', () => {
   it('readonly: любая мутация запрещена кодом', () => {
-    expect(() => assertMutationAllowed('readonly', true, FULL_LOCK)).toThrowError(
+    expect(() => assertMutationAllowed('readonly', true, GATE_CONFIRM)).toThrowError(
       expect.objectContaining({ code: 'APP_TINVEST_TRADING_FORBIDDEN' }),
     );
   });
 
-  it('full: мутация без --confirm отклоняется', () => {
-    expect(() => assertMutationAllowed('full', false, FULL_LOCK)).toThrowError(
+  it('sandbox: подтверждение и флаги окружения не требуются', () => {
+    expect(() => assertMutationAllowed('sandbox', false, GATE_OFF)).not.toThrow();
+  });
+
+  it('full без флага торговли: сделка запрещена (APP_TINVEST_TRADING_DISABLED)', () => {
+    // Само наличие full-токена не открывает реальные сделки — нужен флаг деплоя.
+    expect(() => assertMutationAllowed('full', true, GATE_OFF)).toThrowError(
+      expect.objectContaining({ code: 'APP_TINVEST_TRADING_DISABLED' }),
+    );
+  });
+
+  it('full с ALLOW_TRADING: без --confirm отклоняется, с --confirm проходит', () => {
+    expect(() => assertMutationAllowed('full', false, GATE_CONFIRM)).toThrowError(
       expect.objectContaining({ code: 'APP_TINVEST_CONFIRM_REQUIRED' }),
     );
-    expect(() => assertMutationAllowed('full', true, FULL_LOCK)).not.toThrow();
+    expect(() => assertMutationAllowed('full', true, GATE_CONFIRM)).not.toThrow();
   });
 
-  it('full: мутация с --confirm, но БЕЗ активной full-сессии отклоняется (K13)', () => {
-    // Церемония --acknowledge-trading не выполнена (нет замка) — торговля
-    // реальными деньгами не должна проходить только по --confirm.
-    expect(() => assertMutationAllowed('full', true, null)).toThrowError(
-      expect.objectContaining({ code: 'APP_TINVEST_FULL_SESSION_REQUIRED' }),
-    );
-    // Замок другого режима тоже не открывает full-мутации.
-    const sandboxLock: SessionLock = { ...FULL_LOCK, mode: 'sandbox' };
-    expect(() => assertMutationAllowed('full', true, sandboxLock)).toThrowError(
-      expect.objectContaining({ code: 'APP_TINVEST_FULL_SESSION_REQUIRED' }),
-    );
-  });
-
-  it('sandbox: подтверждение и сессия не требуются', () => {
-    expect(() => assertMutationAllowed('sandbox', false, null)).not.toThrow();
+  it('full со STONKS_MODE: сделка проходит без подтверждения', () => {
+    expect(() => assertMutationAllowed('full', false, GATE_STONKS)).not.toThrow();
   });
 
   it('пути методов: sandbox → SandboxService, боевой → OrdersService', () => {
@@ -124,7 +121,7 @@ describe('placeOrder', () => {
       direction: 'buy',
       limitPrice: 300.5,
       confirm: false,
-      sessionLock: null,
+      tradingGate: GATE_OFF,
     });
     expect(calls[0]?.path).toBe('SandboxService/PostSandboxOrder');
     expect(calls[0]?.body).toMatchObject({
@@ -149,7 +146,7 @@ describe('placeOrder', () => {
       direction: 'sell',
       limitPrice: null,
       confirm: false,
-      sessionLock: null,
+      tradingGate: GATE_OFF,
     });
     expect(calls[0]?.body).toMatchObject({ orderType: 'ORDER_TYPE_MARKET', direction: 'ORDER_DIRECTION_SELL' });
     expect(calls[0]?.body).not.toHaveProperty('price');
@@ -158,7 +155,7 @@ describe('placeOrder', () => {
   it('readonly отклоняется ДО сетевых вызовов', async () => {
     const { api, calls } = makeApi();
     await expect(
-      placeOrder(api, { mode: 'readonly', query: 'SBER', lots: 1, direction: 'buy', limitPrice: null, confirm: true, sessionLock: null }),
+      placeOrder(api, { mode: 'readonly', query: 'SBER', lots: 1, direction: 'buy', limitPrice: null, confirm: true, tradingGate: GATE_CONFIRM }),
     ).rejects.toMatchObject({ code: 'APP_TINVEST_TRADING_FORBIDDEN' });
     expect(calls).toEqual([]);
   });
@@ -166,17 +163,33 @@ describe('placeOrder', () => {
   it('full без confirm отклоняется ДО сетевых вызовов', async () => {
     const { api, calls } = makeApi();
     await expect(
-      placeOrder(api, { mode: 'full', query: 'SBER', lots: 1, direction: 'buy', limitPrice: 300, confirm: false, sessionLock: FULL_LOCK }),
+      placeOrder(api, { mode: 'full', query: 'SBER', lots: 1, direction: 'buy', limitPrice: 300, confirm: false, tradingGate: GATE_CONFIRM }),
     ).rejects.toMatchObject({ code: 'APP_TINVEST_CONFIRM_REQUIRED' });
     expect(calls).toEqual([]);
   });
 
-  it('full с confirm, но без full-сессии отклоняется ДО сетевых вызовов (K13)', async () => {
+  it('full без разрешающего флага отклоняется ДО сетевых вызовов (гейт денег)', async () => {
     const { api, calls } = makeApi();
     await expect(
-      placeOrder(api, { mode: 'full', query: 'SBER', lots: 1, direction: 'buy', limitPrice: 300, confirm: true, sessionLock: null }),
-    ).rejects.toMatchObject({ code: 'APP_TINVEST_FULL_SESSION_REQUIRED' });
+      placeOrder(api, { mode: 'full', query: 'SBER', lots: 1, direction: 'buy', limitPrice: 300, confirm: true, tradingGate: GATE_OFF }),
+    ).rejects.toMatchObject({ code: 'APP_TINVEST_TRADING_DISABLED' });
     expect(calls).toEqual([]);
+  });
+
+  it('full со stonks исполняет заявку без confirm', async () => {
+    const { api, calls } = makeApi({
+      'OrdersService/PostOrder': { orderId: 'srv-2', executionReportStatus: 'EXECUTION_REPORT_STATUS_FILL' },
+    });
+    await placeOrder(api, {
+      mode: 'full',
+      query: 'SBER',
+      lots: 1,
+      direction: 'buy',
+      limitPrice: 300,
+      confirm: false,
+      tradingGate: GATE_STONKS,
+    });
+    expect(calls[0]?.path).toBe('OrdersService/PostOrder');
   });
 });
 
@@ -200,7 +213,7 @@ describe('previewOrder', () => {
       direction: 'buy',
       limitPrice: null,
     });
-    // previewOrder — чтение, sessionLock не требуется.
+    // previewOrder — чтение, гейт торговли не требуется.
     expect(view).toMatchObject({
       priceUsed: 300,
       priceSource: 'last-price',
@@ -218,9 +231,9 @@ describe('previewOrder', () => {
 });
 
 describe('cancelOrder / placeStopOrder', () => {
-  it('отмена заявки в full с confirm и активной full-сессией', async () => {
+  it('отмена заявки в full с confirm и включённой торговлей', async () => {
     const { api, calls } = makeApi({ 'OrdersService/CancelOrder': { time: '2026-07-02T12:00:00Z' } });
-    const result = await cancelOrder(api, { mode: 'full', orderId: 'ord-1', confirm: true, sessionLock: FULL_LOCK });
+    const result = await cancelOrder(api, { mode: 'full', orderId: 'ord-1', confirm: true, tradingGate: GATE_CONFIRM });
     expect(result.cancelledAt).toBe('2026-07-02T12:00:00Z');
     expect(calls[0]?.body).toMatchObject({ accountId: 'acc-1', orderId: 'ord-1' });
   });
@@ -237,7 +250,7 @@ describe('cancelOrder / placeStopOrder', () => {
         stopPrice: 290,
         limitPrice: null,
         confirm: false,
-        sessionLock: null,
+        tradingGate: GATE_OFF,
       }),
     ).rejects.toMatchObject({ code: 'APP_CLI_INVALID_ARGUMENT' });
   });
@@ -253,7 +266,7 @@ describe('cancelOrder / placeStopOrder', () => {
       stopPrice: 350,
       limitPrice: null,
       confirm: false,
-      sessionLock: null,
+      tradingGate: GATE_OFF,
     });
     expect(calls[0]?.body).toMatchObject({
       stopOrderType: 'STOP_ORDER_TYPE_TAKE_PROFIT',
@@ -276,7 +289,7 @@ describe('replaceOrder', () => {
       price: 305,
       newOrderId: 'my-key-123',
       confirm: false,
-      sessionLock: null,
+      tradingGate: GATE_OFF,
     });
     // Ключ идемпотентности замены — наш, а не случайный: повтор безопасен.
     expect(calls[0]?.body).toMatchObject({ orderId: 'ord-1', idempotencyKey: 'my-key-123' });
@@ -292,7 +305,7 @@ describe('replaceOrder', () => {
       lots: 2,
       price: 305,
       confirm: false,
-      sessionLock: null,
+      tradingGate: GATE_OFF,
     });
     expect(view.direction).toBeNull();
   });
@@ -307,7 +320,7 @@ describe('replaceOrder', () => {
       lots: 2,
       price: 305,
       confirm: false,
-      sessionLock: null,
+      tradingGate: GATE_OFF,
     });
     expect(view.direction).toBe('sell');
   });

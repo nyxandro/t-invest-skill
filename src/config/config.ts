@@ -13,9 +13,12 @@
  * - baseUrlForMode(mode) — выбор контура API;
  * - tokenAvailability(env) — какие режимы обеспечены токенами;
  * - hasAnyToken(env) — есть ли хоть один заполненный токен;
- * - resolveModeAndToken(env, explicitMode?) — выбор режима и токена, fail-fast.
+ * - resolveModeAndToken(env, explicitMode?) — выбор режима и токена, fail-fast;
+ * - TRADING_ENABLE_ENV_VAR, STONKS_MODE_ENV_VAR — имена env-флагов торговли;
+ * - TradingGate, resolveTradingGate(env) — гейт реальных сделок из окружения.
  *
- * Политика: в .env хранятся только секреты (токены). Остальные параметры —
+ * Политика: в .env хранятся секреты (токены) и environment-specific флаги
+ * (разрешение реальных сделок для данного окружения). Остальные параметры —
  * именованные константы здесь, а не переменные окружения.
  */
 import os from 'node:os';
@@ -33,6 +36,20 @@ export const TOKEN_ENV_VARS: Record<TInvestMode, string> = {
   readonly: 'T_INVEST_TOKEN_READONLY',
   full: 'T_INVEST_TOKEN_FULL',
 };
+
+// Флаги-разрешения реальных сделок (environment-specific capability, живут
+// в .env рядом с full-токеном). Гейт денег вынесен из сессии в окружение:
+// само наличие full-токена НЕ даёт торговать — нужен явный флаг деплоя.
+// - ALLOW_TRADING: разрешить реальные сделки (каждая — с подтверждением --confirm);
+// - STONKS_MODE: разрешить сделки БЕЗ подтверждений (полностью автономно, опасно);
+//   stonks подразумевает allow-trading.
+export const TRADING_ENABLE_ENV_VAR = 'T_INVEST_ALLOW_TRADING';
+export const STONKS_MODE_ENV_VAR = 'T_INVEST_STONKS_MODE';
+
+// Значения, которые считаем «включено» для булевых env-флагов. Явный список,
+// чтобы опечатка вроде «T_INVEST_ALLOW_TRADING=maybe» трактовалась как «выкл»,
+// а не случайно открывала реальные сделки.
+const TRUTHY_FLAG_VALUES: readonly string[] = ['true', '1', 'yes', 'on'];
 
 // Используем действующие официальные хосты tinkoff.ru: канонические адреса
 // tbank.ru из документации недоступны из этого окружения (TLS-перехват на
@@ -205,4 +222,28 @@ export function resolveModeAndToken(
       `Настроено несколько токенов (режимы: ${available.join(', ')}). ` +
       'Укажите режим явно: --mode sandbox | readonly | full.',
   });
+}
+
+// Гейт реальных сделок, вычисленный из окружения. Разнесён с выбором режима:
+// режим (readonly/sandbox/full) отвечает на «куда смотрим», а гейт — на
+// «можно ли трогать реальные деньги и нужно ли подтверждение на каждую сделку».
+export interface TradingGate {
+  // Разрешены ли реальные сделки в full вообще (иначе full — только чтение).
+  allowTrading: boolean;
+  // Разрешены ли сделки без --confirm (автономный режим). Подразумевает allowTrading.
+  stonksMode: boolean;
+}
+
+// Мягкий разбор булева env-флага: пустое/отсутствующее → false (безопасный
+// дефолт — «выключено»). Это не запрещённый fallback скрытия данных: флаги —
+// осознанный opt-in, отсутствие которого штатно означает «капабилити выключена».
+function parseBooleanFlag(raw: string | undefined): boolean {
+  return TRUTHY_FLAG_VALUES.includes((raw ?? '').trim().toLowerCase());
+}
+
+export function resolveTradingGate(env: Record<string, string | undefined>): TradingGate {
+  // stonks — более сильный флаг: включает и торговлю, и автономность.
+  const stonksMode = parseBooleanFlag(env[STONKS_MODE_ENV_VAR]);
+  const allowTrading = stonksMode || parseBooleanFlag(env[TRADING_ENABLE_ENV_VAR]);
+  return { allowTrading, stonksMode };
 }

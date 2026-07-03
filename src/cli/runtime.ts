@@ -8,7 +8,9 @@
  *   сессия → режим+токен → клиент нужного контура → бизнес-функция → вывод;
  * - runSessionCommand(cmd, fn) — обработчик команд session без API-клиента;
  * - parsePositiveInt(raw, optionName, max?) — валидация целочисленных опций;
- * - parsePositiveNumber(raw, optionName) — валидация числовых опций (цены).
+ * - parsePositiveNumber(raw, optionName) — валидация числовых опций (цены);
+ * - withChart(json, view, human, chart?) — единый способ приложить ASCII-график
+ *   к выводу команды (в --json отдельным полем chart, иначе блоком снизу).
  */
 import type { Command } from 'commander';
 import dotenv from 'dotenv';
@@ -21,15 +23,12 @@ import {
   hasAnyToken,
   parseMode,
   resolveModeAndToken,
+  resolveTradingGate,
   type TInvestMode,
+  type TradingGate,
 } from '../config/config.js';
-import { detectSessionAnchor } from '../config/process-anchor.js';
-import {
-  SESSION_LOCK_DIR,
-  enforceSessionMode,
-  readSessionLock,
-  type SessionLock,
-} from '../config/session.js';
+import { activeModeStatePath } from '../config/session-identity.js';
+import { readActiveMode, resolveCommandMode } from '../config/session.js';
 
 // Загрузка окружения: .env текущей папки, затем — только если ни один токен
 // ещё не найден — глобальный ~/.config/tinvest/.env (запуск из любой директории).
@@ -57,33 +56,38 @@ export function printErrorAndExit(err: unknown): never {
   process.exit(1);
 }
 
-// Общий каркас команды: режим и токен (fail-fast) → клиент нужного контура →
-// бизнес-функция → вывод. Баннер песочницы уходит в stderr, чтобы не портить --json.
+// Общий каркас команды: обязательная активная сессия → режим и токен (fail-fast)
+// → гейт торговли из окружения → клиент нужного контура → бизнес-функция → вывод.
+// Баннеры (песочница, stonks) уходят в stderr, чтобы не портить --json.
 export async function runCommand(
   cmd: Command,
   fn: (
     client: TInvestClient,
     json: boolean,
     mode: TInvestMode,
-    sessionLock: SessionLock | null,
+    tradingGate: TradingGate,
   ) => Promise<unknown>,
 ): Promise<void> {
   try {
     const { json, mode: rawMode } = cmd.optsWithGlobals<{ json?: boolean; mode?: string }>();
     const requestedMode = rawMode ? parseMode(rawMode) : undefined;
-    // Кодовая граница режимов: живой замок текущей сессии Claude Code
-    // переопределяет и запрещает «чужие» режимы независимо от того,
-    // что попросили у агента. Замок — единый источник состояния сессии:
-    // передаём его команде, чтобы торговые мутации могли требовать активную
-    // full-сессию (см. assertMutationAllowed), а не только --confirm.
-    const sessionLock = readSessionLock(SESSION_LOCK_DIR, detectSessionAnchor());
-    const explicitMode = enforceSessionMode(sessionLock, requestedMode);
-    const { mode, token } = resolveModeAndToken(process.env, explicitMode);
+    // Обязательный гейт инициализации и источник истины по режиму — активная
+    // сессия (файл состояния текущей идентичности). Без выбранного режима команда
+    // не идёт (SESSION_REQUIRED); явный --mode не должен молча расходиться с ним.
+    const state = readActiveMode(activeModeStatePath(process.env));
+    const mode = resolveCommandMode(state, requestedMode);
+    const { token } = resolveModeAndToken(process.env, mode);
+    // Гейт реальных сделок вычисляется из окружения и передаётся команде: сам он
+    // определяет, можно ли мутации и нужно ли подтверждение (см. assertMutationAllowed).
+    const tradingGate = resolveTradingGate(process.env);
     if (mode === 'sandbox') {
       console.error('Режим песочницы: счёт и данные виртуальные.');
     }
+    if (mode === 'full' && tradingGate.stonksMode) {
+      console.error('⚠️ STONKS-режим: сделки реальными деньгами выполняются БЕЗ подтверждений.');
+    }
     const client = new TInvestClient({ token, baseUrl: baseUrlForMode(mode) });
-    const result = await fn(client, Boolean(json), mode, sessionLock);
+    const result = await fn(client, Boolean(json), mode, tradingGate);
     console.log(typeof result === 'string' ? result : JSON.stringify(result, null, 2));
   } catch (err) {
     printErrorAndExit(err);
@@ -99,6 +103,22 @@ export async function runSessionCommand(cmd: Command, fn: (json: boolean) => unk
   } catch (err) {
     printErrorAndExit(err);
   }
+}
+
+// Единый способ приложить ASCII-график (флаг --chart) к выводу команды:
+// в --json график уходит отдельным строковым полем `chart` (агент вставляет его
+// в ответ дословно), в человекочитаемый вывод — блоком снизу. chart === undefined
+// (флаг не передан) означает «вывод без изменений» — прежнее поведение команды.
+export function withChart(
+  json: boolean,
+  view: object,
+  human: string,
+  chart: string | undefined,
+): unknown {
+  if (chart === undefined) {
+    return json ? view : human;
+  }
+  return json ? { ...view, chart } : `${human}\n\n${chart}`;
 }
 
 // Валидация целочисленной опции CLI: положительное целое в пределах max.

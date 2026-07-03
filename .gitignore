@@ -6,3 +6,4 @@ t-invest-workspace/
 skill/scripts/tinvest.cjs
 *.skill
 .claude/settings.local.json
+.claude/*.lock

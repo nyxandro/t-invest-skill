@@ -1,139 +1,78 @@
 /**
- * Фиксация режима работы на сессию (session lock) — кодовая граница режимов.
+ * Активный режим сессии: персистентная «памятка», какой режим сейчас выбран.
  *
- * Замок привязан к процессу запущенной сессии Claude Code (см.
- * process-anchor.ts): жив процесс — действует замок, закрыл сессию — замок
- * автоматически недействителен, новая сессия заново выбирает режим.
- * Никаких TTL и обязательного «session end» для пользователя.
- * Это защита штатных путей (defense in depth), а не криптография: субъект
- * с полным доступом к ФС может удалить файл, но это уже явное действие.
+ * Это НЕ гейт денег и не крипто-замок — реальные сделки стережёт TradingGate
+ * из окружения (см. config.ts / paths.ts). Задачи состояния:
+ * 1. Обязательная инициализация: пока режим не выбран, команды с данными не
+ *    выполняются (APP_TINVEST_SESSION_REQUIRED) — агент осознанно фиксирует режим.
+ * 2. Восстановление после потери контекста: агент перечитывает активный режим
+ *    из файла (через session status), а не помнит его в диалоге.
+ * 3. Свободное явное переключение readonly ↔ sandbox ↔ full: смена — простая
+ *    перезапись состояния (writeActiveMode), без «только через новую сессию».
+ *
+ * Путь файла состояния определяет идентичность сессии (см. session-identity.ts):
+ * по TINVEST_SESSION_ID либо глобальный дефолт. Здесь функции работают с уже
+ * разрешённым путём — так модуль чист от env/HOME и тестируется на реальной ФС.
  *
  * Экспорты:
- * - SessionLock — структура замка (mode, startedAt, anchor);
- * - SESSION_LOCK_DIR, LEGACY_SESSION_LOCK_PATH — расположение замков;
- * - sessionLockPath(dir, pid) — файл замка для якоря;
- * - readSessionLock(dir, anchor) — активный замок ТЕКУЩЕГО якоря (null, если
- *   нет; PID-reuse отбрасывается; повреждённый файл — явная ошибка);
- * - isModeConflict(active, mode) — единый предикат «запрошен чужой режим при
- *   живом замке» (используют и startSession, и регистрация команд);
- * - startSession(dir, anchor, mode, now) — создать замок; смена режима при
- *   живом замке запрещена;
- * - endSession(dir, anchor) — снять замок текущего якоря (ручной сброс);
- * - sweepDeadSessions(dir, probe?) — удалить замки умерших сессий и артефакт
- *   старой TTL-схемы;
- * - enforceSessionMode(lock, requestedMode) — граница режимов для команд;
- * - assertFullAcknowledged(mode, acknowledged) — подтверждение full-режима.
+ * - ActiveModeState — {mode, startedAt};
+ * - readActiveMode(filePath) — прочитать состояние (null если нет; битый → ошибка);
+ * - writeActiveMode(filePath, mode, now) — записать/перезаписать (смена свободна);
+ * - clearActiveMode(filePath) — снять фиксацию режима (session end);
+ * - resolveCommandMode(state, requestedMode?) — режим команды: требует активную
+ *   сессию и запрещает молчаливое расхождение с явным --mode.
  */
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { AppError } from '../api/errors.js';
 import { T_INVEST_MODES, type TInvestMode } from './config.js';
-import {
-  isAnchorAlive,
-  systemProbe,
-  type ProcessAnchor,
-  type ProcessProbe,
-} from './process-anchor.js';
 
-export interface SessionLock {
+export interface ActiveModeState {
   mode: TInvestMode;
   startedAt: string;
-  anchor: ProcessAnchor;
 }
 
-// Каталог замков: по файлу на якорь — параллельные сессии Claude Code
-// не конфликтуют (у каждой свой процесс и свой замок).
-export const SESSION_LOCK_DIR = path.join(os.homedir(), '.config', 'tinvest', 'sessions');
-
-// Файл старой схемы (единый замок с TTL 8 ч) — подлежит удалению при sweep.
-export const LEGACY_SESSION_LOCK_PATH = path.join(os.homedir(), '.config', 'tinvest', 'session.json');
-
-export function sessionLockPath(dir: string, pid: number): string {
-  return path.join(dir, `session-${pid}.json`);
-}
-
-function parseLockFile(filePath: string): SessionLock {
-  let lock: SessionLock;
+// Разбор файла состояния. Битый или с неизвестным режимом файл — не игнорируем
+// молча (это часть защитного механизма выбора режима), а даём явную ошибку с
+// подсказкой, как восстановиться.
+function parseStateFile(filePath: string): ActiveModeState {
+  let state: ActiveModeState;
   try {
-    lock = JSON.parse(fs.readFileSync(filePath, 'utf8')) as SessionLock;
+    state = JSON.parse(fs.readFileSync(filePath, 'utf8')) as ActiveModeState;
   } catch (cause) {
-    // Повреждённый замок не игнорируем молча (это защитный механизм) —
-    // явная ошибка с подсказкой, как восстановиться.
     throw new AppError({
       code: 'APP_TINVEST_SESSION_CORRUPT',
-      userMessage: `Файл сессии повреждён: ${filePath}. Удалите его вручную и начните сессию заново командой «tinvest session start».`,
+      userMessage: `Файл сессии повреждён: ${filePath}. Удалите его и заново выберите режим командой «session start».`,
       cause,
     });
   }
-  if (!T_INVEST_MODES.includes(lock.mode) || !lock.anchor || typeof lock.anchor.pid !== 'number') {
+  if (!(T_INVEST_MODES as readonly string[]).includes(state?.mode)) {
     throw new AppError({
       code: 'APP_TINVEST_SESSION_CORRUPT',
-      userMessage: `Файл сессии повреждён (неизвестный режим или нет якоря процесса): ${filePath}. Удалите его вручную и начните сессию заново.`,
+      userMessage: `Файл сессии повреждён (неизвестный режим): ${filePath}. Удалите его и заново выберите режим.`,
     });
   }
-  return lock;
+  return state;
 }
 
-export function readSessionLock(dir: string, anchor: ProcessAnchor): SessionLock | null {
-  const filePath = sessionLockPath(dir, anchor.pid);
-  // Отсутствие файла — штатная ситуация (сессия не начата).
+export function readActiveMode(filePath: string): ActiveModeState | null {
+  // Отсутствие файла — штатная ситуация «режим ещё не выбран».
   if (!fs.existsSync(filePath)) {
     return null;
   }
-  const lock = parseLockFile(filePath);
-  // PID переиспользован новой сессией (другое время старта процесса) —
-  // это замок УМЕРШЕЙ сессии: убираем и работаем как без сессии.
-  if (lock.anchor.startTicks !== anchor.startTicks) {
-    fs.rmSync(filePath, { force: true });
-    return null;
-  }
-  return lock;
+  return parseStateFile(filePath);
 }
 
-// Единый предикат конфликта режима: запрошен режим, отличный от уже
-// зафиксированного живым замком. Один источник правила для startSession и для
-// регистрации команд — чтобы зеркальные проверки не разошлись при доработке.
-export function isModeConflict(active: SessionLock | null, mode: TInvestMode): boolean {
-  return active !== null && active.mode !== mode;
+export function writeActiveMode(filePath: string, mode: TInvestMode, now: Date): ActiveModeState {
+  // Смена режима — обычная перезапись: readonly/sandbox/full переключаются
+  // свободно, без «только новая сессия». Права 0600 — состояние личное.
+  const state: ActiveModeState = { mode, startedAt: now.toISOString() };
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+  return state;
 }
 
-export function startSession(
-  dir: string,
-  anchor: ProcessAnchor,
-  mode: TInvestMode,
-  now: Date,
-): SessionLock {
-  const active = readSessionLock(dir, anchor);
-
-  // Смена режима внутри живой сессии запрещена — в этом весь смысл замка.
-  if (isModeConflict(active, mode)) {
-    // Инвариант: конфликт ⇒ замок существует (active не null), поэтому доступ
-    // к active.mode безопасен (boolean-предикат тип не сужает).
-    throw new AppError({
-      code: 'APP_TINVEST_SESSION_ACTIVE',
-      userMessage:
-        `Сессия уже зафиксирована в режиме «${active!.mode}». ` +
-        'Смена режима — только в новой сессии: закройте текущую сессию Claude Code и откройте новую, ' +
-        'режим будет выбран заново.',
-    });
-  }
-
-  // Тот же режим — идемпотентно; новая сессия — создание замка.
-  const lock: SessionLock = {
-    mode,
-    startedAt: active?.startedAt ?? now.toISOString(),
-    anchor,
-  };
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(sessionLockPath(dir, anchor.pid), `${JSON.stringify(lock, null, 2)}\n`, {
-    mode: 0o600,
-  });
-  return lock;
-}
-
-export function endSession(dir: string, anchor: ProcessAnchor): boolean {
-  const filePath = sessionLockPath(dir, anchor.pid);
+export function clearActiveMode(filePath: string): boolean {
   if (!fs.existsSync(filePath)) {
     return false;
   }
@@ -141,74 +80,29 @@ export function endSession(dir: string, anchor: ProcessAnchor): boolean {
   return true;
 }
 
-// Уборка замков умерших сессий (и артефакта старой TTL-схемы). Вызывается
-// из команд session — то есть как минимум при каждой активации скилла.
-// legacyPath параметризован, чтобы тесты не касались реального HOME.
-export function sweepDeadSessions(
-  dir: string,
-  probe: ProcessProbe = systemProbe,
-  legacyPath: string = LEGACY_SESSION_LOCK_PATH,
-): number {
-  let removed = 0;
-  if (fs.existsSync(legacyPath)) {
-    fs.rmSync(legacyPath, { force: true });
-    removed += 1;
-  }
-  if (!fs.existsSync(dir)) {
-    return removed;
-  }
-  for (const name of fs.readdirSync(dir)) {
-    if (!/^session-\d+\.json$/.test(name)) {
-      continue; // чужие файлы не трогаем
-    }
-    const filePath = path.join(dir, name);
-    let lock: SessionLock;
-    try {
-      lock = parseLockFile(filePath);
-    } catch {
-      // Битый замок мёртвой сессии мешал бы вечно — убираем при уборке.
-      fs.rmSync(filePath, { force: true });
-      removed += 1;
-      continue;
-    }
-    if (!isAnchorAlive(lock.anchor, probe)) {
-      fs.rmSync(filePath, { force: true });
-      removed += 1;
-    }
-  }
-  return removed;
-}
-
-export function enforceSessionMode(
-  lock: SessionLock | null,
+// Режим для команды с данными: источник истины — активный режим сессии.
+export function resolveCommandMode(
+  state: ActiveModeState | null,
   requestedMode?: TInvestMode,
-): TInvestMode | undefined {
-  // Без активной сессии границы нет — работает обычное разрешение режима.
-  if (!lock) {
-    return requestedMode;
-  }
-  // Запрос чужого режима при активной сессии — нарушение границы, отказ кода.
-  if (requestedMode && requestedMode !== lock.mode) {
+): TInvestMode {
+  // Обязательный гейт инициализации: без выбранного режима команда не идёт.
+  if (!state) {
     throw new AppError({
-      code: 'APP_TINVEST_MODE_LOCKED',
+      code: 'APP_TINVEST_SESSION_REQUIRED',
       userMessage:
-        `Нарушение границы режимов: сессия зафиксирована в режиме «${lock.mode}», ` +
-        `команда в режиме «${requestedMode}» отклонена. Смена режима — только в новой сессии Claude Code: ` +
-        'закройте текущую и откройте новую, режим будет выбран заново.',
+        'Режим работы не выбран. Сначала зафиксируйте его: «session start --mode readonly | sandbox | full» ' +
+        '(по умолчанию — readonly). Пока режим не выбран, команды с данными не выполняются.',
     });
   }
-  return lock.mode;
-}
-
-export function assertFullAcknowledged(mode: TInvestMode, acknowledged: boolean): void {
-  // Полноправный токен = потенциальный доступ к торговым операциям реальными
-  // деньгами. Требуем явное машинное подтверждение осознанного выбора.
-  if (mode === 'full' && !acknowledged) {
+  // Явный --mode не должен молча расходиться с активным режимом: переключение —
+  // осознанное действие через session start, а не побочный эффект команды.
+  if (requestedMode && requestedMode !== state.mode) {
     throw new AppError({
-      code: 'APP_TINVEST_FULL_ACK_REQUIRED',
+      code: 'APP_TINVEST_MODE_MISMATCH',
       userMessage:
-        'Режим «full» использует полноправный токен с доступом к торговым операциям реальными деньгами. ' +
-        'Подтвердите осознанный выбор флагом --acknowledge-trading при запуске «session start».',
+        `Активный режим сессии — «${state.mode}», а команда запрошена в режиме «${requestedMode}». ` +
+        `Смените режим явно: «session start --mode ${requestedMode}», затем повторите команду.`,
     });
   }
+  return state.mode;
 }

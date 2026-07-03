@@ -1,23 +1,26 @@
 /**
  * Диспетчер торговых методов по режиму и предохранители торговых команд.
  *
- * Граница безопасности (в дополнение к замку сессии и уровням токенов):
+ * Граница безопасности реальных денег вынесена из сессии в окружение
+ * (TradingGate) — «лестница» гейтов для мутаций:
  * - readonly: чтение заявок разрешено, ЛЮБАЯ мутация запрещена кодом
  *   (APP_TINVEST_TRADING_FORBIDDEN) — ещё до обращения к API;
- * - full: каждая мутация требует явного флага --confirm
- *   (APP_TINVEST_CONFIRM_REQUIRED) И активной full-сессии, зафиксированной с
- *   подтверждением (APP_TINVEST_FULL_SESSION_REQUIRED) — иначе торговля
- *   реальными деньгами обошла бы церемонию осознанного выбора режима;
- * - sandbox: свободная торговля виртуальными деньгами через SandboxService.
+ * - sandbox: свободная торговля виртуальными деньгами через SandboxService;
+ * - full без флага T_INVEST_ALLOW_TRADING: чтение можно, сделка запрещена
+ *   (APP_TINVEST_TRADING_DISABLED) — само наличие full-токена не открывает
+ *   реальные сделки, нужен явный флаг деплоя;
+ * - full с ALLOW_TRADING: каждая сделка требует --confirm (подпись человека),
+ *   без него — APP_TINVEST_CONFIRM_REQUIRED;
+ * - full со STONKS_MODE: сделки без подтверждений (автономно, осознанный
+ *   опасный opt-in деплоя).
  *
  * Экспорты:
  * - TradingPaths — таблица путей методов для режима;
  * - tradingPathsForMode(mode) — выбор контура (sandbox ↔ боевой);
- * - assertMutationAllowed(mode, confirmed, sessionLock) — предохранитель мутаций.
+ * - assertMutationAllowed(mode, confirmed, gate) — предохранитель мутаций.
  */
 import { AppError } from '../../api/errors.js';
-import type { TInvestMode } from '../../config/config.js';
-import type { SessionLock } from '../../config/session.js';
+import { TRADING_ENABLE_ENV_VAR, type TInvestMode, type TradingGate } from '../../config/config.js';
 
 export interface TradingPaths {
   postOrder: string;
@@ -64,40 +67,46 @@ export function tradingPathsForMode(mode: TInvestMode): TradingPaths {
   return mode === 'sandbox' ? SANDBOX_PATHS : REAL_PATHS;
 }
 
-// sessionLock — активный замок текущей сессии (или null). Для full-мутаций он
-// обязателен: церемония --acknowledge-trading при «session start» — это и есть
-// осознанное подтверждение доступа к реальным деньгам. Без активной full-сессии
-// full-мутация запрещена, даже если передан --confirm (иначе пользователь с
-// единственным full-токеном торговал бы реальными деньгами вообще без церемонии).
+// gate — гейт реальных сделок из окружения (см. resolveTradingGate). Деньги
+// стережёт он, а не сессия: без флага деплоя full торгует только «на чтение»,
+// с ALLOW_TRADING нужна подпись человека на каждую сделку (--confirm), а
+// STONKS_MODE снимает подтверждения (автономно, осознанный опасный opt-in).
 export function assertMutationAllowed(
   mode: TInvestMode,
   confirmed: boolean,
-  sessionLock: SessionLock | null,
+  gate: TradingGate,
 ): void {
   if (mode === 'readonly') {
     throw new AppError({
       code: 'APP_TINVEST_TRADING_FORBIDDEN',
       userMessage:
         'Торговые операции недоступны в режиме «только чтение». ' +
-        'Для тренировки используйте песочницу (sandbox), для реальной торговли — режим full в новой сессии.',
+        'Для тренировки используйте песочницу (sandbox), для реальной торговли — режим full.',
     });
   }
-  if (mode === 'full') {
-    if (!confirmed) {
-      throw new AppError({
-        code: 'APP_TINVEST_CONFIRM_REQUIRED',
-        userMessage:
-          'Режим full — торговля реальными деньгами: повторите команду с флагом --confirm ' +
-          'после явного подтверждения пользователя.',
-      });
-    }
-    if (!sessionLock || sessionLock.mode !== 'full') {
-      throw new AppError({
-        code: 'APP_TINVEST_FULL_SESSION_REQUIRED',
-        userMessage:
-          'Торговля реальными деньгами требует активной сессии режима full, зафиксированной с ' +
-          'подтверждением: сначала выполните «session start --acknowledge-trading», затем повторите заявку.',
-      });
-    }
+  // Песочница — виртуальные деньги: торговля свободна, гейт денег не действует.
+  if (mode === 'sandbox') {
+    return;
+  }
+  // full: сначала капабилити-гейт деплоя, затем — подпись человека на сделку.
+  if (!gate.allowTrading) {
+    throw new AppError({
+      code: 'APP_TINVEST_TRADING_DISABLED',
+      userMessage:
+        'Реальные сделки выключены. Само наличие full-токена не даёт торговать: ' +
+        `включите их флагом ${TRADING_ENABLE_ENV_VAR}=true в .env (чтение в режиме full доступно и без него).`,
+    });
+  }
+  // Автономный режим — подтверждение на каждую сделку не требуется.
+  if (gate.stonksMode) {
+    return;
+  }
+  if (!confirmed) {
+    throw new AppError({
+      code: 'APP_TINVEST_CONFIRM_REQUIRED',
+      userMessage:
+        'Сделка реальными деньгами требует подтверждения: повторите команду с флагом --confirm ' +
+        'после явного согласия пользователя на эту заявку.',
+    });
   }
 }

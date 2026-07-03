@@ -1,11 +1,13 @@
 /**
- * Регистрация команд управления сессией режима и песочницей.
+ * Регистрация команд управления активным режимом сессии и песочницей.
  *
  * Экспорты:
  * - registerSessionCommands(program) — добавляет команды:
- *   session start --mode <m> [--acknowledge-trading] — зафиксировать режим;
- *   session status — активная сессия и доступность токенов;
- *   session end — снять фиксацию (выполняет пользователь, не агент);
+ *   session start [--mode <m>] — зафиксировать активный режим (по умолчанию
+ *     readonly); переключение свободно, повтор перезаписывает режим;
+ *   session status — активный режим, доступность токенов и гейт торговли
+ *     (единый источник правды для агента после потери контекста);
+ *   session end — снять фиксацию режима;
  *   sandbox init [--amount N] — открыть и пополнить счёт в песочнице.
  */
 import type { Command } from 'commander';
@@ -17,101 +19,119 @@ import {
   MAX_SANDBOX_PAYIN_RUB,
   parseMode,
   resolveModeAndToken,
+  resolveTradingGate,
   tokenAvailability,
+  type TradingGate,
 } from '../config/config.js';
-import { detectSessionAnchor } from '../config/process-anchor.js';
-import {
-  SESSION_LOCK_DIR,
-  assertFullAcknowledged,
-  endSession,
-  isModeConflict,
-  readSessionLock,
-  startSession,
-  sweepDeadSessions,
-} from '../config/session.js';
+import { SESSION_ID_ENV_VAR, activeModeStatePath } from '../config/session-identity.js';
+import { clearActiveMode, readActiveMode, writeActiveMode } from '../config/session.js';
 import { parsePositiveInt, runCommand, runSessionCommand } from './runtime.js';
+
+// Предупреждение stonks-режима — одно место истины (используют session start и
+// session status). Агент показывает его пользователю один раз при активации.
+const STONKS_WARNING =
+  '⚠️ Включён stonks-режим (T_INVEST_STONKS_MODE): агент может совершать сделки реальными ' +
+  'деньгами БЕЗ подтверждений. Вы передаёте полный автономный доступ к счёту — ответственность ' +
+  'на вас, это небезопасно.';
+
+// Строка про состояние реальных сделок для человекочитаемого вывода.
+function tradingStatusLine(gate: TradingGate): string {
+  if (gate.stonksMode) {
+    return 'Реальные сделки: STONKS — выполняются БЕЗ подтверждений.';
+  }
+  if (gate.allowTrading) {
+    return 'Реальные сделки: включены (каждая заявка требует --confirm).';
+  }
+  return 'Реальные сделки: выключены (в full доступно только чтение).';
+}
 
 export function registerSessionCommands(program: Command): void {
   const session = program
     .command('session')
-    .description('фиксация режима на сессию работы (граница режимов на уровне кода)');
+    .description('фиксация активного режима на сессию (обязательна перед командами с данными)');
 
   session
     .command('start')
-    .description('зафиксировать режим до конца сессии (смена — только в новой сессии); режим задаётся глобальным флагом --mode')
-    .option(
-      '--acknowledge-trading',
-      'обязательное подтверждение для режима full (доступ к торговым операциям реальными деньгами)',
-    )
-    .action(async (opts: { acknowledgeTrading?: boolean }, cmd: Command) =>
+    .description('зафиксировать активный режим (по умолчанию readonly); переключение — этой же командой в любой момент')
+    .action(async (_opts: unknown, cmd: Command) =>
       runSessionCommand(cmd, (json) => {
-        // Режим приходит через глобальный -m/--mode: локальная одноимённая опция
-        // конфликтовала бы с глобальной (commander перехватывает значение).
+        // Режим приходит через глобальный -m/--mode. Без него дефолт — readonly
+        // (самый безопасный: реальный счёт, но сделки технически невозможны).
         const { mode: rawMode } = cmd.optsWithGlobals<{ mode?: string }>();
-        if (!rawMode) {
-          throw new AppError({
-            code: 'APP_CLI_INVALID_ARGUMENT',
-            userMessage: 'Укажите режим сессии: tinvest session start --mode sandbox | readonly | full.',
-          });
+        const mode = rawMode ? parseMode(rawMode) : 'readonly';
+        // fail-fast: токен нужного режима обязан существовать до записи состояния.
+        resolveModeAndToken(process.env, mode);
+        const gate = resolveTradingGate(process.env);
+        const state = writeActiveMode(activeModeStatePath(process.env), mode, new Date());
+        if (json) {
+          return {
+            activeMode: state.mode,
+            startedAt: state.startedAt,
+            tradingAllowed: gate.allowTrading,
+            stonksMode: gate.stonksMode,
+          };
         }
-        const mode = parseMode(rawMode);
-        assertFullAcknowledged(mode, Boolean(opts.acknowledgeTrading));
-        // Уборка замков умерших сессий + порядок проверок: сначала граница
-        // сессии (главное защитное сообщение), затем fail-fast по токену —
-        // и только потом запись замка.
-        sweepDeadSessions(SESSION_LOCK_DIR);
-        const anchor = detectSessionAnchor();
-        const now = new Date();
-        const active = readSessionLock(SESSION_LOCK_DIR, anchor);
-        // Нет конфликта режима — проверяем токен (fail-fast) до записи замка.
-        // При конфликте токен не трогаем: startSession выдаст главное сообщение
-        // APP_TINVEST_SESSION_ACTIVE (единый предикат isModeConflict — там же).
-        if (!isModeConflict(active, mode)) {
-          resolveModeAndToken(process.env, mode);
+        const lines = [
+          `Активный режим зафиксирован: «${state.mode}». Переключить можно в любой момент: session start --mode <режим>.`,
+        ];
+        // Для full поясняем текущее состояние гейта реальных сделок.
+        if (mode === 'full') {
+          lines.push(gate.stonksMode ? STONKS_WARNING : tradingStatusLine(gate));
         }
-        const lock = startSession(SESSION_LOCK_DIR, anchor, mode, now);
-        return json
-          ? lock
-          : `Сессия зафиксирована: режим «${lock.mode}» до закрытия текущей сессии Claude Code.\nКоманды других режимов будут отклоняться с кодом APP_TINVEST_MODE_LOCKED.`;
+        return lines.join('\n');
       }),
     );
 
   session
     .command('status')
-    .description('показать активную сессию и доступность токенов по режимам')
+    .description('показать активный режим, доступность токенов и состояние гейта торговли')
     .action(async (_opts: unknown, cmd: Command) =>
       runSessionCommand(cmd, (json) => {
-        sweepDeadSessions(SESSION_LOCK_DIR);
-        const lock = readSessionLock(SESSION_LOCK_DIR, detectSessionAnchor());
-        // Доступность токенов нужна скиллу для «живого» списка режимов:
-        // предлагать пользователю только то, что реально настроено.
+        const state = readActiveMode(activeModeStatePath(process.env));
+        // Доступность токенов нужна скиллу для «живого» списка режимов.
         const tokens = tokenAvailability(process.env);
+        const gate = resolveTradingGate(process.env);
+        const sessionId = process.env[SESSION_ID_ENV_VAR]?.trim() || null;
+        const warning = gate.stonksMode ? STONKS_WARNING : null;
         if (json) {
-          return { active: lock !== null, session: lock, tokens, tokenEnvPath: GLOBAL_ENV_PATH };
+          return {
+            active: state !== null,
+            activeMode: state?.mode ?? null,
+            startedAt: state?.startedAt ?? null,
+            sessionId,
+            tokens,
+            tradingAllowed: gate.allowTrading,
+            stonksMode: gate.stonksMode,
+            warning,
+            tokenEnvPath: GLOBAL_ENV_PATH,
+          };
         }
         const tokensLine = (Object.entries(tokens) as [string, boolean][])
           .map(([mode, ok]) => `${mode}: ${ok ? '✓' : '✗ (токен не настроен)'}`)
           .join(', ');
-        const sessionLine = lock
-          ? `Активная сессия: режим «${lock.mode}», начата ${lock.startedAt}, действует до закрытия сессии Claude Code.`
-          : 'Активной сессии нет — режим не зафиксирован.';
-        return `${sessionLine}\nТокены: ${tokensLine}\nФайл токенов: ${GLOBAL_ENV_PATH}`;
+        const modeLine = state
+          ? `Активный режим: «${state.mode}» (зафиксирован ${state.startedAt}).`
+          : 'Активный режим не выбран — выполните «session start» (по умолчанию readonly).';
+        // warning отфильтровываем: в человекочитаемом выводе он появляется только
+        // когда включён stonks.
+        return [modeLine, `Токены: ${tokensLine}`, tradingStatusLine(gate), warning, `Файл токенов: ${GLOBAL_ENV_PATH}`]
+          .filter(Boolean)
+          .join('\n');
       }),
     );
 
   session
     .command('end')
-    .description('снять замок текущей сессии вручную (обычно не нужно: замок умирает вместе с сессией)')
+    .description('снять фиксацию активного режима (следующая команда потребует заново выбрать режим)')
     .action(async (_opts: unknown, cmd: Command) =>
       runSessionCommand(cmd, (json) => {
-        sweepDeadSessions(SESSION_LOCK_DIR);
-        const removed = endSession(SESSION_LOCK_DIR, detectSessionAnchor());
+        const removed = clearActiveMode(activeModeStatePath(process.env));
         if (json) {
           return { ended: removed };
         }
         return removed
-          ? 'Сессия завершена. Новый режим можно выбрать командой «session start».'
-          : 'Активной сессии не было.';
+          ? 'Режим сброшен. Выберите новый командой «session start».'
+          : 'Активного режима не было.';
       }),
     );
 
@@ -128,7 +148,7 @@ export function registerSessionCommands(program: Command): void {
         if (mode !== 'sandbox') {
           throw new AppError({
             code: 'APP_TINVEST_SANDBOX_ONLY',
-            userMessage: 'Команда «sandbox init» доступна только в режиме песочницы. Запустите с --mode sandbox.',
+            userMessage: 'Команда «sandbox init» доступна только в режиме песочницы. Зафиксируйте режим: session start --mode sandbox.',
           });
         }
         const amount = parsePositiveInt(opts.amount, '--amount', MAX_SANDBOX_PAYIN_RUB);

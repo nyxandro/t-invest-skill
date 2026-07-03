@@ -76,7 +76,7 @@ function registerPlaceCommand(order: Command, direction: TradeDirection): void {
         opts: { lots: string; price?: string; account?: string; confirm?: boolean; orderId?: string },
         cmd: Command,
       ) =>
-        runCommand(cmd, async (client, json, mode, sessionLock) => {
+        runCommand(cmd, async (client, json, mode, tradingGate) => {
           const view = await placeOrder(client, {
             mode,
             explicitAccountId: opts.account,
@@ -86,7 +86,7 @@ function registerPlaceCommand(order: Command, direction: TradeDirection): void {
             limitPrice: opts.price !== undefined ? parsePositiveNumber(opts.price, '--price') : null,
             orderId: opts.orderId,
             confirm: Boolean(opts.confirm),
-            sessionLock,
+            tradingGate,
           });
           return json ? view : renderPlacedOrder(view);
         }),
@@ -158,13 +158,13 @@ export function registerTradingCommands(program: Command): void {
     .option('-a, --account <id>', 'идентификатор счёта')
     .option('--confirm', 'подтверждение (обязателен в режиме full)')
     .action(async (orderId: string, opts: { account?: string; confirm?: boolean }, cmd: Command) =>
-      runCommand(cmd, async (client, json, mode, sessionLock) => {
+      runCommand(cmd, async (client, json, mode, tradingGate) => {
         const result = await cancelOrder(client, {
           mode,
           explicitAccountId: opts.account,
           orderId,
           confirm: Boolean(opts.confirm),
-          sessionLock,
+          tradingGate,
         });
         return json ? result : `Заявка ${orderId} отменена${result.cancelledAt ? ` (${result.cancelledAt})` : ''}.`;
       }),
@@ -185,7 +185,7 @@ export function registerTradingCommands(program: Command): void {
         opts: { lots: string; price: string; account?: string; confirm?: boolean; orderId?: string },
         cmd: Command,
       ) =>
-        runCommand(cmd, async (client, json, mode, sessionLock) => {
+        runCommand(cmd, async (client, json, mode, tradingGate) => {
           const view = await replaceOrder(client, {
             mode,
             explicitAccountId: opts.account,
@@ -194,7 +194,7 @@ export function registerTradingCommands(program: Command): void {
             price: parsePositiveNumber(opts.price, '--price'),
             newOrderId: opts.orderId,
             confirm: Boolean(opts.confirm),
-            sessionLock,
+            tradingGate,
           });
           return json ? view : renderPlacedOrder(view);
         }),
@@ -231,7 +231,7 @@ export function registerTradingCommands(program: Command): void {
         },
         cmd: Command,
       ) =>
-        runCommand(cmd, async (client, json, mode, sessionLock) => {
+        runCommand(cmd, async (client, json, mode, tradingGate) => {
           const view = await placeStopOrder(client, {
             mode,
             explicitAccountId: opts.account,
@@ -243,7 +243,7 @@ export function registerTradingCommands(program: Command): void {
             limitPrice: opts.price !== undefined ? parsePositiveNumber(opts.price, '--price') : null,
             orderId: opts.orderId,
             confirm: Boolean(opts.confirm),
-            sessionLock,
+            tradingGate,
           });
           return json ? view : renderPlacedStopOrder(view);
         }),
@@ -267,13 +267,13 @@ export function registerTradingCommands(program: Command): void {
     .option('-a, --account <id>', 'идентификатор счёта')
     .option('--confirm', 'подтверждение (обязателен в режиме full)')
     .action(async (stopOrderId: string, opts: { account?: string; confirm?: boolean }, cmd: Command) =>
-      runCommand(cmd, async (client, json, mode, sessionLock) => {
+      runCommand(cmd, async (client, json, mode, tradingGate) => {
         const result = await cancelStopOrder(client, {
           mode,
           explicitAccountId: opts.account,
           stopOrderId,
           confirm: Boolean(opts.confirm),
-          sessionLock,
+          tradingGate,
         });
         return json
           ? result

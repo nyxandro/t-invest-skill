@@ -30,8 +30,7 @@ import type {
   PostOrderRequest,
   PostOrderResponse,
 } from '../../api/types-trading.js';
-import type { TInvestMode } from '../../config/config.js';
-import type { SessionLock } from '../../config/session.js';
+import type { TInvestMode, TradingGate } from '../../config/config.js';
 import { renderTable } from '../../format/table.js';
 import { DASH } from '../../format/values.js';
 import {
@@ -147,11 +146,11 @@ export async function placeOrder(
     limitPrice: number | null; // null — рыночная заявка
     orderId?: string; // свой ключ идемпотентности (для повтора)
     confirm: boolean;
-    sessionLock: SessionLock | null;
+    tradingGate: TradingGate;
   },
 ): Promise<PlacedOrderView> {
   // Предохранитель ДО любых сетевых вызовов (в full — требует full-сессию).
-  assertMutationAllowed(params.mode, params.confirm, params.sessionLock);
+  assertMutationAllowed(params.mode, params.confirm, params.tradingGate);
   const paths = tradingPathsForMode(params.mode);
   // Резолвы счёта и инструмента независимы — параллелим (экономия round-trip).
   const [accountId, instrument] = await Promise.all([
@@ -321,10 +320,10 @@ export async function cancelOrder(
     explicitAccountId?: string;
     orderId: string;
     confirm: boolean;
-    sessionLock: SessionLock | null;
+    tradingGate: TradingGate;
   },
 ): Promise<{ cancelledAt: string | null }> {
-  assertMutationAllowed(params.mode, params.confirm, params.sessionLock);
+  assertMutationAllowed(params.mode, params.confirm, params.tradingGate);
   const paths = tradingPathsForMode(params.mode);
   const accountId = await resolveAccountId(api, params.explicitAccountId);
   const resp = await api.call<CancelOrderResponse>(paths.cancelOrder, {
@@ -344,10 +343,10 @@ export async function replaceOrder(
     price: number;
     newOrderId?: string; // свой ключ идемпотентности для повтора замены
     confirm: boolean;
-    sessionLock: SessionLock | null;
+    tradingGate: TradingGate;
   },
 ): Promise<PlacedOrderView> {
-  assertMutationAllowed(params.mode, params.confirm, params.sessionLock);
+  assertMutationAllowed(params.mode, params.confirm, params.tradingGate);
   const paths = tradingPathsForMode(params.mode);
   const accountId = await resolveAccountId(api, params.explicitAccountId);
   // Ключ идемпотентности замены: свой (для безопасного повтора при таймауте)

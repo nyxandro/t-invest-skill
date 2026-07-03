@@ -11,6 +11,7 @@ import {
   baseUrlForMode,
   parseMode,
   resolveModeAndToken,
+  resolveTradingGate,
   tokenAvailability,
 } from './config.js';
 
@@ -100,5 +101,38 @@ describe('baseUrlForMode', () => {
     expect(baseUrlForMode('sandbox')).toBe(T_INVEST_SANDBOX_BASE_URL);
     expect(baseUrlForMode('readonly')).toBe(T_INVEST_BASE_URL);
     expect(baseUrlForMode('full')).toBe(T_INVEST_BASE_URL);
+  });
+});
+
+describe('resolveTradingGate', () => {
+  it('без флагов — торговля выключена', () => {
+    expect(resolveTradingGate({})).toEqual({ allowTrading: false, stonksMode: false });
+  });
+
+  it('T_INVEST_ALLOW_TRADING включает торговлю, но не автономность', () => {
+    expect(resolveTradingGate({ T_INVEST_ALLOW_TRADING: 'true' })).toEqual({
+      allowTrading: true,
+      stonksMode: false,
+    });
+  });
+
+  it('stonks-режим подразумевает разрешение торговли', () => {
+    expect(resolveTradingGate({ T_INVEST_STONKS_MODE: 'true' })).toEqual({
+      allowTrading: true,
+      stonksMode: true,
+    });
+  });
+
+  it('распознаёт разные истинные значения без учёта регистра и пробелов', () => {
+    for (const raw of ['1', 'yes', 'ON', '  True  ']) {
+      expect(resolveTradingGate({ T_INVEST_ALLOW_TRADING: raw }).allowTrading).toBe(true);
+    }
+  });
+
+  it('мусорное значение флага трактуется как «выключено» (не открывает сделки)', () => {
+    expect(resolveTradingGate({ T_INVEST_ALLOW_TRADING: 'maybe' })).toEqual({
+      allowTrading: false,
+      stonksMode: false,
+    });
   });
 });
