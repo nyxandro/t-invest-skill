@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Упаковка скилла t-invest в устанавливаемый пакет ``t-invest.skill``.
 
-.skill — это ZIP-архив, который распаковывается в каталог скиллов Claude Code
-(``unzip t-invest.skill -d ~/.claude/skills/`` → ``~/.claude/skills/t-invest/``),
-поэтому все файлы кладутся под общий верхний каталог ``t-invest/``.
+.skill — это ZIP-архив, который распаковывается в каталог скиллов агента:
+``~/.agents/skills/`` (общий для агентов) или ``~/.claude/skills/`` (Claude Code);
+установщик install.sh кладёт в оба. Все файлы под общим верхним каталогом
+``t-invest/`` (``unzip t-invest.skill -d <каталог>`` → ``<каталог>/t-invest/``).
 
 Собирается ТОЛЬКО рантайм скилла — то, что нужно агенту в работе:
 инструкция ``SKILL.md``, самодостаточный бандл ``scripts/tinvest.cjs`` и
@@ -23,14 +24,14 @@ from pathlib import Path
 
 # Корень репозитория — родитель каталога scripts/, чтобы запуск не зависел от cwd.
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SKILL_DIR = REPO_ROOT / "skill"
+SKILL_DIR = REPO_ROOT / "skills" / "t-invest"
 OUTPUT = REPO_ROOT / "t-invest.skill"
 
 # Имя верхнего каталога внутри архива = имя устанавливаемого скилла.
 SKILL_NAME = "t-invest"
 
-# Что кладём в пакет (относительно skill/). Явный список, а не рекурсивный обход,
-# чтобы случайные файлы (evals, временные) не утекли в релиз.
+# Что кладём в пакет (относительно skills/t-invest/). Явный список, а не
+# рекурсивный обход, чтобы случайные файлы (evals, временные) не утекли в релиз.
 CONTENTS = [
     "SKILL.md",
     "scripts/tinvest.cjs",
@@ -45,7 +46,7 @@ def build() -> None:
     # Fail-fast: без собранного бандла пакет неработоспособен — не молчим.
     missing = [rel for rel in CONTENTS if not (SKILL_DIR / rel).is_file()]
     if missing:
-        hint = "сначала `npm run build:skill`" if "scripts/tinvest.cjs" in missing else "проверьте skill/"
+        hint = "сначала `npm run build:skill`" if "scripts/tinvest.cjs" in missing else "проверьте skills/t-invest/"
         raise SystemExit(
             f"APP_PACK_SKILL_MISSING_FILES: не найдены файлы скилла: {', '.join(missing)}. "
             f"Что делать: {hint}."

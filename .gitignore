@@ -3,7 +3,6 @@ dist/
 .env
 *.log
 t-invest-workspace/
-skill/scripts/tinvest.cjs
 *.skill
 !/t-invest.skill
 .claude/settings.local.json

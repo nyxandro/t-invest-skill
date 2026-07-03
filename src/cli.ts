@@ -16,7 +16,7 @@
  *   подключаются по мере реализации.
  *
  * Каркас исполнения (env, границы ошибок, парсеры) — src/cli/runtime.ts.
- * Глобальный флаг --json — машиночитаемый вывод (для скилла Claude Code).
+ * Глобальный флаг --json — машиночитаемый вывод (для скилла и интеграций).
  */
 import { Command } from 'commander';
 import { registerAnalyticsCommands } from './cli/register-analytics.js';
@@ -35,7 +35,7 @@ program
   .name('tinvest')
   .description('CLI для Т-Инвестиций (T-Invest API): портфель, котировки, поиск, операции')
   .version('0.1.0')
-  .option('--json', 'вывод в формате JSON (для интеграций и Claude)')
+  .option('--json', 'вывод в формате JSON (для интеграций и скилла)')
   .option(
     '-m, --mode <mode>',
     'режим: sandbox | readonly | full (по умолчанию — по единственному заполненному токену)',
