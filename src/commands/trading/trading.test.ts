@@ -13,7 +13,7 @@ import {
   replaceOrder,
   type TradingApi,
 } from './orders.js';
-import { placeStopOrder } from './stop-orders.js';
+import { listStopOrders, placeStopOrder } from './stop-orders.js';
 
 // Гейты реальных сделок из окружения (см. resolveTradingGate):
 // OFF — торговля выключена; CONFIRM — включена, нужна подпись на каждую сделку;
@@ -323,5 +323,44 @@ describe('replaceOrder', () => {
       tradingGate: GATE_OFF,
     });
     expect(view.direction).toBe('sell');
+  });
+
+  it('резолвит тикер по figi из ответа, а не показывает сырой FIGI', async () => {
+    // Ответ ReplaceOrder содержит только figi (без ticker) — вывод должен
+    // показать бумагу «SBER», резолвленную через findInstrument по figi.
+    const { api } = makeApi({
+      'SandboxService/ReplaceSandboxOrder': { orderId: 'srv-9', figi: 'BBG004730N88' },
+    });
+    const view = await replaceOrder(api, {
+      mode: 'sandbox',
+      orderId: 'ord-1',
+      lots: 2,
+      price: 305,
+      confirm: false,
+      tradingGate: GATE_OFF,
+    });
+    expect(view.ticker).toBe('SBER');
+  });
+});
+
+describe('listStopOrders', () => {
+  it('резолвит тикер по figi (стоп-лист API не отдаёт ticker)', async () => {
+    // GetStopOrders возвращает только figi — список должен показать «SBER»,
+    // а не FIGI (регрессия, найденная e2e-прогоном в песочнице).
+    const { api } = makeApi({
+      'SandboxService/GetSandboxStopOrders': {
+        stopOrders: [
+          {
+            stopOrderId: 's1',
+            figi: 'BBG004730N88',
+            direction: 'STOP_ORDER_DIRECTION_SELL',
+            lotsRequested: '1',
+            stopPrice: { currency: 'rub', units: '320', nano: 0 },
+          },
+        ],
+      },
+    });
+    const views = await listStopOrders(api, { mode: 'sandbox' });
+    expect(views[0]?.ticker).toBe('SBER');
   });
 });

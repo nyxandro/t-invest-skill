@@ -41,7 +41,7 @@ import {
   type TradeDirection,
 } from '../../format/direction.js';
 import { resolveAccountId, type AccountsApi } from '../resolve-account.js';
-import { resolveInstrument, type InstrumentSearchApi } from '../resolve-instrument.js';
+import { resolveInstrument, resolveLabelByFigi, type InstrumentSearchApi } from '../resolve-instrument.js';
 import { assertMutationAllowed, tradingPathsForMode } from './paths.js';
 
 export interface TradingApi extends AccountsApi, InstrumentSearchApi {
@@ -361,8 +361,11 @@ export async function replaceOrder(
     quantity: String(params.lots),
     price: numberToQuotation(params.price),
   });
+  // Ответ ReplaceOrder не содержит ticker (только figi) — резолвим бумагу по
+  // figi, чтобы в подтверждении не показывать сырой FIGI. Не нашли → figi/orderId.
+  const label = await resolveLabelByFigi(api, resp.figi ?? '');
   return toPlacedView(resp, {
-    ticker: resp.figi ?? params.orderId,
+    ticker: label?.ticker ?? resp.figi ?? params.orderId,
     // Направление берём из ответа; при отсутствии поля — null, не «покупка».
     direction: directionFromApi(resp.direction),
     orderType: 'limit',

@@ -20,12 +20,14 @@ import type {
   StopOrderInfo,
   StopOrderType,
 } from '../../api/types-trading.js';
-import type { TInvestMode, TradingGate } from '../../config/config.js';
+import { BATCH_CONCURRENCY, BATCH_MIN_INTERVAL_MS, type TInvestMode, type TradingGate } from '../../config/config.js';
 import { renderTable } from '../../format/table.js';
 import { formatMoscowDate } from '../../format/datetime.js';
 import { DASH } from '../../format/values.js';
 import { directionFromApi, directionLabel, stopDirectionToApi } from '../../format/direction.js';
+import { mapWithConcurrency } from '../../util/concurrency.js';
 import { resolveAccountId } from '../resolve-account.js';
+import { resolveLabelByFigi } from '../resolve-instrument.js';
 import { assertMutationAllowed, tradingPathsForMode } from './paths.js';
 import { resolveTradeInstrument, type TradeDirection, type TradingApi } from './orders.js';
 
@@ -140,7 +142,37 @@ export async function listStopOrders(
   const paths = tradingPathsForMode(params.mode);
   const accountId = await resolveAccountId(api, params.explicitAccountId);
   const resp = await api.call<GetStopOrdersResponse>(paths.getStopOrders, { accountId });
-  return (resp.stopOrders ?? []).map(toStopOrderView);
+  const infos = resp.stopOrders ?? [];
+  // GetStopOrders не отдаёт ticker (только figi) — резолвим бумагу по figi,
+  // иначе в списке виден сырой FIGI. Троттлим батч (как в портфеле, чтобы не
+  // ловить 429) и терпим сбой одной карточки: тикер — презентационное поле,
+  // при неудаче остаётся figi (политика no-fallbacks её не покрывает).
+  const uniqueFigis = [...new Set(infos.map((i) => i.figi).filter((f): f is string => Boolean(f)))];
+  const tickerByFigi = new Map<string, string>();
+  if (uniqueFigis.length > 0) {
+    await mapWithConcurrency(
+      uniqueFigis,
+      { concurrency: BATCH_CONCURRENCY, minIntervalMs: BATCH_MIN_INTERVAL_MS },
+      async (figi): Promise<null> => {
+        try {
+          const label = await resolveLabelByFigi(api, figi);
+          if (label) {
+            tickerByFigi.set(figi, label.ticker);
+          }
+        } catch (err) {
+          console.error(
+            `Предупреждение: не удалось получить тикер по FIGI ${figi}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        return null;
+      },
+    );
+  }
+  return infos.map((info) => {
+    const view = toStopOrderView(info);
+    const ticker = info.figi ? tickerByFigi.get(info.figi) : undefined;
+    return ticker ? { ...view, ticker } : view;
+  });
 }
 
 export async function cancelStopOrder(
