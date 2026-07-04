@@ -36,7 +36,7 @@ import { resolveInstrument, resolveLabelByFigi, type InstrumentSearchApi } from 
 import { assertMarketOrderLiquidity, assertMutationAllowed, tradingPathsForMode } from './paths.js';
 import { priceTypeFor } from './price-type.js';
 import { pricingForFigi, priceUnitsByFigi, resolvePricingContext } from './pricing-context.js';
-import { type PriceUnit } from '../../format/units.js';
+import { priceUnitFromCurrency, type PriceUnit } from '../../format/units.js';
 
 export interface TradingApi extends AccountsApi, InstrumentSearchApi {
   call<T>(methodPath: string, body: unknown): Promise<T>;
@@ -353,7 +353,10 @@ export function toOrderStateView(
     totalAmount: moneyToNumberOrNull(order.totalOrderAmount),
     currency: order.totalOrderAmount?.currency ?? null,
     orderDate: order.orderDate ?? null,
-    priceUnit: pricing.priceUnit,
+    // Единицу цены берём из валюты самого поля initialSecurityPrice (контуры
+    // отдают её в разных единицах: бой — пункты, песочница — рубли); тип
+    // инструмента (pricing.priceUnit) — фолбэк, если валюта не пришла.
+    priceUnit: priceUnitFromCurrency(order.initialSecurityPrice?.currency) ?? pricing.priceUnit,
     nominalRub: pricing.nominalRub,
   };
 }

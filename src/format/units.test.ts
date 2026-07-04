@@ -8,6 +8,7 @@ import {
   formatInstrumentPrice,
   formatMoneyAmount,
   priceUnitFor,
+  priceUnitFromCurrency,
 } from './units.js';
 
 describe('priceUnitFor', () => {
@@ -20,6 +21,24 @@ describe('priceUnitFor', () => {
 
   it('набор «пунктовых» типов — облигации и фьючерсы', () => {
     expect([...POINT_PRICED_INSTRUMENT_TYPES].sort()).toEqual(['bond', 'futures']);
+  });
+});
+
+describe('priceUnitFromCurrency', () => {
+  it('«pt.» → point (боевой контур отдаёт цену облигации в пунктах)', () => {
+    expect(priceUnitFromCurrency('pt.')).toBe('point');
+    expect(priceUnitFromCurrency('PT.')).toBe('point');
+  });
+
+  it('реальная валюта → currency (песочница отдаёт цену облигации в рублях)', () => {
+    expect(priceUnitFromCurrency('rub')).toBe('currency');
+    expect(priceUnitFromCurrency('usd')).toBe('currency');
+  });
+
+  it('пусто/нет валюты → null (решает вызывающий по типу инструмента)', () => {
+    expect(priceUnitFromCurrency('')).toBeNull();
+    expect(priceUnitFromCurrency(null)).toBeNull();
+    expect(priceUnitFromCurrency(undefined)).toBeNull();
   });
 });
 

@@ -12,7 +12,7 @@
 import { randomUUID } from 'node:crypto';
 import { AppError } from '../../api/errors.js';
 import { moneyToNumberOrNull, numberToQuotation } from '../../api/money.js';
-import { formatInstrumentPrice, priceUnitFor, type PriceUnit } from '../../format/units.js';
+import { formatInstrumentPrice, priceUnitFor, priceUnitFromCurrency, type PriceUnit } from '../../format/units.js';
 import { resolvePricingContext } from './pricing-context.js';
 import type {
   CancelStopOrderResponse,
@@ -145,6 +145,7 @@ export interface StopOrderView {
   createDate: string | null;
   status: string | null;
   priceUnit: PriceUnit; // единица stopPrice/limitPrice: 'point' (облигации/фьючерсы) | 'currency'
+  currency: string | null; // валюта поля цены из ответа API (для символа в выводе)
 }
 
 // pricing по умолчанию — валюта: инструмент не резолвлен или это акция/фонд.
@@ -165,7 +166,10 @@ export function toStopOrderView(
     limitPrice: limit !== null && limit !== 0 ? limit : null,
     createDate: info.createDate ?? null,
     status: info.status ?? null,
-    priceUnit: pricing.priceUnit,
+    // Единицу берём из валюты самого поля stopPrice (бой — пункты, песочница —
+    // рубли); тип инструмента (pricing.priceUnit) — фолбэк при отсутствии валюты.
+    priceUnit: priceUnitFromCurrency(info.stopPrice?.currency) ?? pricing.priceUnit,
+    currency: info.stopPrice?.currency ?? null,
   };
 }
 
@@ -265,12 +269,13 @@ export function renderStopOrders(views: StopOrderView[]): string {
       v.ticker ?? DASH,
       directionLabel(v.direction),
       v.lots !== null ? String(v.lots) : DASH,
-      // В таблице — метка единицы без ₽-эквивалента (nominalRub не тянем на список).
+      // В таблице — метка единицы без ₽-эквивалента (nominalRub не тянем на список):
+      // «пт» в бою, символ валюты — в песочнице (где цена приходит в рублях).
       v.stopPrice !== null
-        ? formatInstrumentPrice(v.stopPrice, { unit: v.priceUnit, nominalRub: null, currency: null })
+        ? formatInstrumentPrice(v.stopPrice, { unit: v.priceUnit, nominalRub: null, currency: v.currency })
         : DASH,
       v.limitPrice !== null
-        ? formatInstrumentPrice(v.limitPrice, { unit: v.priceUnit, nominalRub: null, currency: null })
+        ? formatInstrumentPrice(v.limitPrice, { unit: v.priceUnit, nominalRub: null, currency: v.currency })
         : DASH,
       // Дата создания — в МСК (createDate приходит в UTC).
       v.createDate ? formatMoscowDate(v.createDate) : DASH,

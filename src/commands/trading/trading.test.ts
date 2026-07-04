@@ -11,10 +11,11 @@ import {
   placeOrder,
   previewOrder,
   replaceOrder,
+  toOrderStateView,
   type TradingApi,
 } from './orders.js';
 import { renderOrderPreview, renderPlacedOrder } from './orders-render.js';
-import { listStopOrders, placeStopOrder, renderPlacedStopOrder } from './stop-orders.js';
+import { listStopOrders, placeStopOrder, renderPlacedStopOrder, toStopOrderView } from './stop-orders.js';
 
 // Журнал сделок пишет в реальный ~/.config/tinvest/trades.log — в тестах глушим,
 // чтобы прогон не засорял файл пользователя (сама логика журнала — в audit.test.ts).
@@ -609,6 +610,38 @@ describe('единицы цены в выводе (пункты vs рубли)',
     });
     expect(view.priceUnit).toBe('point');
     expect(renderPlacedStopOrder(view)).toContain('99.50 пт (≈ 995.00 ₽/шт)');
+  });
+});
+
+describe('единица цены read-back берётся из валюты поля (бой=пункты, песочница=рубли)', () => {
+  it('order state: initialSecurityPrice в «pt.» → point (боевой контур)', () => {
+    const view = toOrderStateView(
+      { initialSecurityPrice: { currency: 'pt.', units: '100', nano: 500000000 } },
+      { priceUnit: 'currency', nominalRub: 1000 }, // тип-фолбэк намеренно другой
+    );
+    expect(view.priceUnit).toBe('point');
+  });
+
+  it('order state: initialSecurityPrice в «rub» → currency (песочница отдаёт цену облигации в рублях)', () => {
+    const view = toOrderStateView(
+      { initialSecurityPrice: { currency: 'rub', units: '1200', nano: 0 } },
+      { priceUnit: 'point', nominalRub: 1000 }, // даже если тип говорит point — валюта поля важнее
+    );
+    expect(view.priceUnit).toBe('currency');
+  });
+
+  it('order state: валюта поля не пришла → фолбэк на тип инструмента', () => {
+    const view = toOrderStateView({}, { priceUnit: 'point', nominalRub: 1000 });
+    expect(view.priceUnit).toBe('point');
+  });
+
+  it('stop order: stopPrice в «rub» → currency, в «pt.» → point', () => {
+    expect(toStopOrderView({ stopPrice: { currency: 'rub', units: '500', nano: 0 } }, { priceUnit: 'point' }).priceUnit).toBe(
+      'currency',
+    );
+    expect(toStopOrderView({ stopPrice: { currency: 'pt.', units: '50', nano: 0 } }, { priceUnit: 'currency' }).priceUnit).toBe(
+      'point',
+    );
   });
 });
 

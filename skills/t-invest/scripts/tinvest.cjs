@@ -6945,6 +6945,15 @@ function priceUnitFor(instrumentType) {
 function isPointsCurrency(currency) {
   return typeof currency === "string" && POINTS_CURRENCY_TOKENS.includes(currency.toLowerCase());
 }
+function priceUnitFromCurrency(currency) {
+  if (isPointsCurrency(currency)) {
+    return "point";
+  }
+  if (typeof currency === "string" && currency.trim() !== "") {
+    return "currency";
+  }
+  return null;
+}
 function formatInstrumentPrice(value, opts) {
   if (opts.unit === "currency") {
     return opts.currency ? `${formatAmount(value)} ${currencySymbol(opts.currency)}` : formatAmount(value);
@@ -8246,7 +8255,10 @@ function toOrderStateView(order, pricing = { priceUnit: "currency", nominalRub: 
     totalAmount: moneyToNumberOrNull(order.totalOrderAmount),
     currency: order.totalOrderAmount?.currency ?? null,
     orderDate: order.orderDate ?? null,
-    priceUnit: pricing.priceUnit,
+    // Единицу цены берём из валюты самого поля initialSecurityPrice (контуры
+    // отдают её в разных единицах: бой — пункты, песочница — рубли); тип
+    // инструмента (pricing.priceUnit) — фолбэк, если валюта не пришла.
+    priceUnit: priceUnitFromCurrency(order.initialSecurityPrice?.currency) ?? pricing.priceUnit,
     nominalRub: pricing.nominalRub
   };
 }
@@ -8482,7 +8494,10 @@ function toStopOrderView(info, pricing = { priceUnit: "currency" }) {
     limitPrice: limit !== null && limit !== 0 ? limit : null,
     createDate: info.createDate ?? null,
     status: info.status ?? null,
-    priceUnit: pricing.priceUnit
+    // Единицу берём из валюты самого поля stopPrice (бой — пункты, песочница —
+    // рубли); тип инструмента (pricing.priceUnit) — фолбэк при отсутствии валюты.
+    priceUnit: priceUnitFromCurrency(info.stopPrice?.currency) ?? pricing.priceUnit,
+    currency: info.stopPrice?.currency ?? null
   };
 }
 async function listStopOrders(api, params) {
@@ -8558,9 +8573,10 @@ function renderStopOrders(views) {
       v.ticker ?? DASH,
       directionLabel(v.direction),
       v.lots !== null ? String(v.lots) : DASH,
-      // В таблице — метка единицы без ₽-эквивалента (nominalRub не тянем на список).
-      v.stopPrice !== null ? formatInstrumentPrice(v.stopPrice, { unit: v.priceUnit, nominalRub: null, currency: null }) : DASH,
-      v.limitPrice !== null ? formatInstrumentPrice(v.limitPrice, { unit: v.priceUnit, nominalRub: null, currency: null }) : DASH,
+      // В таблице — метка единицы без ₽-эквивалента (nominalRub не тянем на список):
+      // «пт» в бою, символ валюты — в песочнице (где цена приходит в рублях).
+      v.stopPrice !== null ? formatInstrumentPrice(v.stopPrice, { unit: v.priceUnit, nominalRub: null, currency: v.currency }) : DASH,
+      v.limitPrice !== null ? formatInstrumentPrice(v.limitPrice, { unit: v.priceUnit, nominalRub: null, currency: v.currency }) : DASH,
       // Дата создания — в МСК (createDate приходит в UTC).
       v.createDate ? formatMoscowDate(v.createDate) : DASH
     ])

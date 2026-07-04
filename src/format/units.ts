@@ -9,6 +9,8 @@
  * - POINT_PRICED_INSTRUMENT_TYPES — типы, торгуемые в пунктах (bond, futures);
  * - PriceUnit — 'point' | 'currency' (единица цены; попадает и в JSON-вывод);
  * - priceUnitFor(instrumentType) — единица цены по типу инструмента;
+ * - priceUnitFromCurrency(currency) — единица по валюте самого поля из ответа
+ *   API (для read-back полей: контуры отдают цену в разных единицах);
  * - formatInstrumentPrice(value, opts) — цена с меткой единицы и (для облигаций)
  *   рублёвым эквивалентом: «100.50 пт (≈ 1 005.00 ₽/шт)»;
  * - formatMoneyAmount(value, currency) — сумма с валютой/пунктами: «1 007.76 ₽».
@@ -38,6 +40,21 @@ export function priceUnitFor(instrumentType: string): PriceUnit {
 // true, если код валюты из ответа API означает «пункты», а не деньги.
 function isPointsCurrency(currency: string | null | undefined): boolean {
   return typeof currency === 'string' && POINTS_CURRENCY_TOKENS.includes(currency.toLowerCase());
+}
+
+// Единица цены по валюте САМОГО поля из ответа API — для read-back полей
+// (initialSecurityPrice заявки, stopPrice стоп-заявки). Один и тот же инструмент
+// боевой контур (OrdersService) отдаёт в пунктах (currency "pt."), а песочница
+// (SandboxService) — в рублях (currency "rub"). Поэтому единицу берём из поля, а
+// не из типа инструмента. null — валюта не пришла: пусть решает вызывающий (по типу).
+export function priceUnitFromCurrency(currency: string | null | undefined): PriceUnit | null {
+  if (isPointsCurrency(currency)) {
+    return 'point';
+  }
+  if (typeof currency === 'string' && currency.trim() !== '') {
+    return 'currency';
+  }
+  return null;
 }
 
 export function formatInstrumentPrice(
