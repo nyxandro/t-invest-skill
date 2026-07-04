@@ -10,7 +10,8 @@
  * Экспорты:
  * - MOSCOW_OFFSET_MS — сдвиг МСК относительно UTC;
  * - formatMoscowDateTime(iso) — «YYYY-MM-DD HH:MM» в МСК;
- * - formatMoscowDate(iso) — «YYYY-MM-DD» в МСК.
+ * - formatMoscowDate(iso) — «YYYY-MM-DD» в МСК;
+ * - formatMoscowTime(iso) — «HH:MM» в МСК (время суток без даты).
  */
 
 // МСК фиксирован на UTC+3 круглый год (Россия не переходит на летнее время
@@ -61,4 +62,12 @@ export function formatMoscowDate(iso: string): string {
     return iso;
   }
   return `${p.year}-${pad2(p.month)}-${pad2(p.day)}`;
+}
+
+export function formatMoscowTime(iso: string): string {
+  const p = moscowParts(iso);
+  if (!p) {
+    return iso;
+  }
+  return `${pad2(p.hours)}:${pad2(p.minutes)}`;
 }

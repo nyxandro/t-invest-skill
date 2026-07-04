@@ -10,17 +10,13 @@
  * - placeOrder(api, params) — выставить рыночную/лимитную заявку;
  * - previewOrder(api, params) — оценка стоимости и доступных лотов (чтение);
  * - listOrders / orderStatus / cancelOrder / replaceOrder;
- * - renderPlacedOrder / renderOrderPreview / renderOrders / renderOrderState.
+ * - PlacedOrderView / OrderPreviewView / OrderStateView — типы представлений
+ *   (текстовые рендеры этих типов — в orders-render.ts).
  */
 import { randomUUID } from 'node:crypto';
 import { AppError } from '../../api/errors.js';
-import {
-  formatAmount,
-  moneyToNumberOrNull,
-  numberToQuotation,
-  quotationToNumberOrNull,
-} from '../../api/money.js';
-import type { GetLastPricesResponse } from '../../api/types.js';
+import { moneyToNumberOrNull, numberToQuotation, quotationToNumberOrNull } from '../../api/money.js';
+import type { BondResponse, GetLastPricesResponse } from '../../api/types.js';
 import type { GetOrderBookResponse } from '../../api/types-market.js';
 import type {
   CancelOrderResponse,
@@ -30,25 +26,23 @@ import type {
   OrderState,
   PostOrderRequest,
   PostOrderResponse,
+  ReplaceOrderRequest,
 } from '../../api/types-trading.js';
 import { MARKET_ORDER_MAX_SPREAD_PERCENT, type TInvestMode, type TradingGate } from '../../config/config.js';
-import { renderTable } from '../../format/table.js';
-import { DASH } from '../../format/values.js';
-import {
-  directionFromApi,
-  directionLabel,
-  directionPhrase,
-  orderDirectionToApi,
-  type TradeDirection,
-} from '../../format/direction.js';
+import { directionFromApi, orderDirectionToApi, type TradeDirection } from '../../format/direction.js';
 import { appendTradeAudit } from '../../util/audit.js';
 import { resolveAccountId, type AccountsApi } from '../resolve-account.js';
 import { resolveInstrument, resolveLabelByFigi, type InstrumentSearchApi } from '../resolve-instrument.js';
 import { assertMarketOrderLiquidity, assertMutationAllowed, tradingPathsForMode } from './paths.js';
+import { priceTypeFor } from './price-type.js';
+import { pricingForFigi, priceUnitsByFigi, resolvePricingContext } from './pricing-context.js';
+import { type PriceUnit } from '../../format/units.js';
 
 export interface TradingApi extends AccountsApi, InstrumentSearchApi {
   call<T>(methodPath: string, body: unknown): Promise<T>;
   getLastPrices(instrumentIds: string[]): Promise<GetLastPricesResponse>;
+  // Карточка облигации по UID — для номинала (рублёвый эквивалент цены в пунктах).
+  getBondBy(uid: string): Promise<BondResponse>;
 }
 
 // Реэкспорт для торговых модулей и регистрации команд (единый тип направления).
@@ -87,6 +81,8 @@ export interface PlacedOrderView {
   commission: number | null;
   currency: string | null;
   message: string | null; // причина отклонения (если есть)
+  priceUnit: PriceUnit; // 'point' (облигации/фьючерсы) | 'currency' — единица цены
+  nominalRub: number | null; // номинал облигации для ₽-эквивалента (иначе null)
 }
 
 function orderStatusText(status: string | undefined): string | null {
@@ -118,6 +114,8 @@ function toPlacedView(
     direction: TradeDirection | null;
     orderType: 'market' | 'limit';
     clientOrderId: string;
+    priceUnit: PriceUnit;
+    nominalRub: number | null;
   },
 ): PlacedOrderView {
   return {
@@ -134,6 +132,8 @@ function toPlacedView(
     commission: moneyToNumberOrNull(resp.executedCommission),
     currency: resp.totalOrderAmount?.currency ?? null,
     message: resp.message || null,
+    priceUnit: base.priceUnit,
+    nominalRub: base.nominalRub,
   };
 }
 
@@ -178,6 +178,10 @@ export async function placeOrder(
     );
   }
 
+  // Лимитная цена уходит вместе с priceType по типу инструмента: для облигаций
+  // и фьючерсов — в пунктах (POINT), иначе — в валюте (CURRENCY). Без этого
+  // цена облигации трактуется как рубли и отклоняется как «вне коридора цен».
+  // У рыночной заявки цены нет — priceType не нужен (нечего трактовать).
   const request: PostOrderRequest = {
     accountId,
     instrumentId: instrument.uid,
@@ -185,12 +189,24 @@ export async function placeOrder(
     direction: orderDirectionToApi(params.direction),
     orderType: orderType === 'limit' ? 'ORDER_TYPE_LIMIT' : 'ORDER_TYPE_MARKET',
     orderId: clientOrderId,
-    ...(params.limitPrice !== null ? { price: numberToQuotation(params.limitPrice) } : {}),
+    ...(params.limitPrice !== null
+      ? { price: numberToQuotation(params.limitPrice), priceType: priceTypeFor(instrument.instrumentType) }
+      : {}),
   };
   announceIdempotencyKey(clientOrderId);
   const resp = await api.call<PostOrderResponse>(paths.postOrder, request);
+  // Единица цены и номинал (для ₽-эквивалента) — после исполнения заявки, чтобы
+  // презентационный запрос номинала не задерживал саму мутацию (best-effort).
+  const pricing = await resolvePricingContext(api, instrument.instrumentType, instrument.uid);
   // Направление известно из запроса пользователя — берём его, а не из ответа.
-  const view = toPlacedView(resp, { ticker: instrument.ticker, direction: params.direction, orderType, clientOrderId });
+  const view = toPlacedView(resp, {
+    ticker: instrument.ticker,
+    direction: params.direction,
+    orderType,
+    clientOrderId,
+    priceUnit: pricing.priceUnit,
+    nominalRub: pricing.nominalRub,
+  });
   // Аудит исполненной мутации (best-effort, не роняет команду).
   appendTradeAudit({
     at: new Date().toISOString(),
@@ -224,6 +240,8 @@ export interface OrderPreviewView {
   maxBuyLots: number | null;
   maxSellLots: number | null;
   availableMoney: number | null;
+  priceUnit: PriceUnit; // единица priceUsed: 'point' (облигации/фьючерсы) | 'currency'
+  nominalRub: number | null; // номинал облигации для ₽-эквивалента (иначе null)
 }
 
 export async function previewOrder(
@@ -280,6 +298,10 @@ export async function previewOrder(
     currency = price.totalOrderAmount?.currency ?? currency;
   }
 
+  // Единица цены и номинал (для ₽-эквивалента и предупреждения о заниженной
+  // оценке суммы по облигациям — см. рендер предпросмотра).
+  const pricing = await resolvePricingContext(api, instrument.instrumentType, instrument.uid);
+
   return {
     ticker: instrument.ticker,
     name: instrument.name,
@@ -294,6 +316,8 @@ export async function previewOrder(
     maxBuyLots: maxLots.buyLimits?.buyMaxLots ? Number(maxLots.buyLimits.buyMaxLots) : null,
     maxSellLots: maxLots.sellLimits?.sellMaxLots ? Number(maxLots.sellLimits.sellMaxLots) : null,
     availableMoney: quotationToNumberOrNull(maxLots.buyLimits?.buyMoneyAmount),
+    priceUnit: pricing.priceUnit,
+    nominalRub: pricing.nominalRub,
   };
 }
 
@@ -308,9 +332,16 @@ export interface OrderStateView {
   totalAmount: number | null;
   currency: string | null;
   orderDate: string | null;
+  priceUnit: PriceUnit; // единица initialPrice: 'point' (облигации/фьючерсы) | 'currency'
+  nominalRub: number | null; // номинал для ₽-эквивалента (в таблице null — не тянем)
 }
 
-export function toOrderStateView(order: OrderState): OrderStateView {
+// pricing по умолчанию — валюта без номинала: инструмент не резолвлен или
+// это акция/фонд. Облигации/фьючерсы каллеры помечают явно (см. listOrders/orderStatus).
+export function toOrderStateView(
+  order: OrderState,
+  pricing: { priceUnit: PriceUnit; nominalRub: number | null } = { priceUnit: 'currency', nominalRub: null },
+): OrderStateView {
   return {
     orderId: order.orderId ?? null,
     ticker: order.ticker ?? order.figi ?? null,
@@ -322,6 +353,8 @@ export function toOrderStateView(order: OrderState): OrderStateView {
     totalAmount: moneyToNumberOrNull(order.totalOrderAmount),
     currency: order.totalOrderAmount?.currency ?? null,
     orderDate: order.orderDate ?? null,
+    priceUnit: pricing.priceUnit,
+    nominalRub: pricing.nominalRub,
   };
 }
 
@@ -332,7 +365,13 @@ export async function listOrders(
   const paths = tradingPathsForMode(params.mode);
   const accountId = await resolveAccountId(api, params.explicitAccountId);
   const resp = await api.call<GetOrdersResponse>(paths.getOrders, { accountId });
-  return (resp.orders ?? []).map(toOrderStateView);
+  const orders = resp.orders ?? [];
+  // Единица цены по каждому figi (батч, троттлинг) — чтобы облигации в таблице
+  // помечались «пт», а не выглядели как рубли. Номинал в таблице не тянем.
+  const units = await priceUnitsByFigi(api, orders.map((o) => o.figi ?? ''));
+  return orders.map((o) =>
+    toOrderStateView(o, { priceUnit: (o.figi && units.get(o.figi)) || 'currency', nominalRub: null }),
+  );
 }
 
 export async function orderStatus(
@@ -345,7 +384,9 @@ export async function orderStatus(
     accountId,
     orderId: params.orderId,
   });
-  return toOrderStateView(resp);
+  // Детальный вывод — полный контекст (единица + номинал для ₽-эквивалента).
+  const pricing = await pricingForFigi(api, resp.figi ?? '');
+  return toOrderStateView(resp, pricing);
 }
 
 export async function cancelOrder(
@@ -392,27 +433,50 @@ export async function replaceOrder(
   assertMutationAllowed(params.mode, params.confirm, params.tradingGate);
   const paths = tradingPathsForMode(params.mode);
   const accountId = await resolveAccountId(api, params.explicitAccountId);
+  // priceType для замены задаётся по типу инструмента, но ReplaceOrder работает
+  // по orderId и типа бумаги не знает. Читаем состояние заявки (безопасно, это
+  // чтение) → figi → карточку инструмента, ещё ДО отправки замены. Так же
+  // получаем ticker для подтверждения (ответ ReplaceOrder ticker не содержит).
+  const state = await api.call<OrderState>(paths.getOrderState, {
+    accountId,
+    orderId: params.orderId,
+  });
+  const instrument = await resolveLabelByFigi(api, state.figi ?? '');
+  // Тип инструмента — обязательные данные для корректной цены (пункты/валюта).
+  // Не смогли определить — не заменяем: слепой priceType по облигации выставил
+  // бы цену неверного типа (no-fallbacks — не угадываем валюту вместо пунктов).
+  if (!instrument) {
+    throw new AppError({
+      code: 'APP_TINVEST_ORDER_INSTRUMENT_UNKNOWN',
+      userMessage:
+        `Не удалось определить инструмент заявки ${params.orderId} — замена отменена, ` +
+        'чтобы не выставить цену неверного типа. Проверьте номер заявки: order status.',
+    });
+  }
   // Ключ идемпотентности замены: свой (для безопасного повтора при таймауте)
   // или сгенерированный. Раньше он всегда был случайным — повтор замены
   // отправлял новый ключ, и API не мог сопоставить его с первым запросом.
   const idempotencyKey = params.newOrderId ?? randomUUID();
   announceIdempotencyKey(idempotencyKey);
-  const resp = await api.call<PostOrderResponse>(paths.replaceOrder, {
+  const replaceRequest: ReplaceOrderRequest = {
     accountId,
     orderId: params.orderId,
     idempotencyKey,
     quantity: String(params.lots),
     price: numberToQuotation(params.price),
-  });
-  // Ответ ReplaceOrder не содержит ticker (только figi) — резолвим бумагу по
-  // figi, чтобы в подтверждении не показывать сырой FIGI. Не нашли → figi/orderId.
-  const label = await resolveLabelByFigi(api, resp.figi ?? '');
+    priceType: priceTypeFor(instrument.instrumentType),
+  };
+  const resp = await api.call<PostOrderResponse>(paths.replaceOrder, replaceRequest);
+  // Единица цены и номинал (для ₽-эквивалента) по уже известному инструменту заявки.
+  const pricing = await resolvePricingContext(api, instrument.instrumentType, instrument.uid);
   const view = toPlacedView(resp, {
-    ticker: label?.ticker ?? resp.figi ?? params.orderId,
+    ticker: instrument.ticker,
     // Направление берём из ответа; при отсутствии поля — null, не «покупка».
     direction: directionFromApi(resp.direction),
     orderType: 'limit',
     clientOrderId: idempotencyKey,
+    priceUnit: pricing.priceUnit,
+    nominalRub: pricing.nominalRub,
   });
   appendTradeAudit({
     at: new Date().toISOString(),
@@ -427,63 +491,4 @@ export async function replaceOrder(
     status: view.statusText,
   });
   return view;
-}
-
-// --- Рендеры ---
-
-// Заголовок заявки: направление может быть неизвестно (null) — тогда фразу о
-// направлении опускаем, а не подставляем «покупку».
-function placedHeaderDirection(direction: TradeDirection | null): string {
-  return direction ? `${directionPhrase(direction)} ` : '';
-}
-
-export function renderPlacedOrder(view: PlacedOrderView): string {
-  const lines = [
-    `Заявка ${placedHeaderDirection(view.direction)}${view.ticker} (${view.orderType === 'limit' ? 'лимитная' : 'рыночная'}): ${view.statusText ?? DASH}`,
-    `Номер: ${view.orderId ?? DASH} | ключ идемпотентности: ${view.clientOrderId} | лотов: ${view.lotsExecuted ?? 0}/${view.lotsRequested ?? DASH}`,
-    `Сумма: ${view.totalAmount !== null ? `${formatAmount(view.totalAmount)} ${view.currency?.toUpperCase() ?? ''}` : DASH}` +
-      (view.commission !== null ? ` | комиссия: ${formatAmount(view.commission)}` : ''),
-  ];
-  if (view.message) {
-    lines.push(`Сообщение брокера: ${view.message}`);
-  }
-  return lines.join('\n');
-}
-
-export function renderOrderPreview(view: OrderPreviewView): string {
-  return [
-    `Предпросмотр: ${directionLabel(view.direction)} ${view.ticker} (${view.name}), лотов: ${view.lots}` +
-      (view.lotSize !== null ? ` (в лоте ${view.lotSize} шт.)` : ''),
-    `Цена для оценки: ${view.priceUsed !== null ? formatAmount(view.priceUsed) : DASH} (${view.priceSource === 'limit' ? 'лимитная' : 'последняя рыночная'})`,
-    `Оценка суммы: ${view.estimatedAmount !== null ? `${formatAmount(view.estimatedAmount)} ${view.currency?.toUpperCase() ?? ''}` : DASH}` +
-      (view.commission !== null ? ` | комиссия: ${formatAmount(view.commission)}` : ''),
-    `Доступно: покупка до ${view.maxBuyLots ?? DASH} лотов | продажа до ${view.maxSellLots ?? DASH} лотов` +
-      (view.availableMoney !== null ? ` | свободно ${formatAmount(view.availableMoney)}` : ''),
-  ].join('\n');
-}
-
-export function renderOrders(views: OrderStateView[]): string {
-  if (views.length === 0) {
-    return 'Активных заявок нет.';
-  }
-  return renderTable(
-    ['Номер', 'Тикер', 'Напр.', 'Статус', 'Лоты', 'Цена', 'Сумма'],
-    views.map((v) => [
-      v.orderId ?? DASH,
-      v.ticker ?? DASH,
-      directionLabel(v.direction),
-      v.statusText ?? DASH,
-      `${v.lotsExecuted ?? 0}/${v.lotsRequested ?? DASH}`,
-      v.initialPrice !== null ? formatAmount(v.initialPrice) : DASH,
-      v.totalAmount !== null ? formatAmount(v.totalAmount) : DASH,
-    ]),
-  );
-}
-
-export function renderOrderState(view: OrderStateView): string {
-  return [
-    `Заявка ${view.orderId ?? DASH}: ${view.statusText ?? DASH}`,
-    `${view.ticker ?? DASH} | ${directionLabel(view.direction)} | лотов ${view.lotsExecuted ?? 0}/${view.lotsRequested ?? DASH}`,
-    `Цена: ${view.initialPrice !== null ? formatAmount(view.initialPrice) : DASH} | сумма: ${view.totalAmount !== null ? formatAmount(view.totalAmount) : DASH}`,
-  ].join('\n');
 }

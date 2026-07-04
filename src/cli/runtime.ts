@@ -98,10 +98,15 @@ export async function runCommand(
 }
 
 // Обработчик команд session: без API-клиента, но с той же границей ошибок.
-export async function runSessionCommand(cmd: Command, fn: (json: boolean) => unknown): Promise<void> {
+// Колбэк может быть асинхронным (например, session status делает проверку
+// обновлений по сети) — результат дожидаем.
+export async function runSessionCommand(
+  cmd: Command,
+  fn: (json: boolean) => unknown | Promise<unknown>,
+): Promise<void> {
   try {
     const { json } = cmd.optsWithGlobals<{ json?: boolean }>();
-    const result = fn(Boolean(json));
+    const result = await fn(Boolean(json));
     console.log(typeof result === 'string' ? result : JSON.stringify(result, null, 2));
   } catch (err) {
     printErrorAndExit(err);

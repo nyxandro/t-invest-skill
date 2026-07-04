@@ -22,13 +22,15 @@ import {
   orderStatus,
   placeOrder,
   previewOrder,
+  replaceOrder,
+  type TradeDirection,
+} from '../commands/trading/orders.js';
+import {
   renderOrderPreview,
   renderOrderState,
   renderOrders,
   renderPlacedOrder,
-  replaceOrder,
-  type TradeDirection,
-} from '../commands/trading/orders.js';
+} from '../commands/trading/orders-render.js';
 import {
   cancelStopOrder,
   listStopOrders,
@@ -66,7 +68,10 @@ function registerPlaceCommand(order: Command, direction: TradeDirection): void {
     .description(`${direction === 'buy' ? 'купить' : 'продать'}: рыночная (без --price) или лимитная заявка`)
     .argument('<query>', 'тикер или ISIN инструмента')
     .requiredOption('-q, --lots <n>', 'количество ЛОТОВ (см. размер лота в order preview)')
-    .option('--price <price>', 'лимитная цена (без неё — рыночная заявка)')
+    .option(
+      '--price <price>',
+      'лимитная цена (без неё — рыночная заявка); для облигаций и фьючерсов — в пунктах (% номинала)',
+    )
     .option('-a, --account <id>', 'идентификатор счёта')
     .option('--confirm', 'подтверждение сделки реальными деньгами (обязателен в режиме full)')
     .option('--order-id <id>', 'свой ключ идемпотентности (повтор той же заявки не продублирует её)')
@@ -103,7 +108,10 @@ export function registerTradingCommands(program: Command): void {
     .description('предпросмотр: оценка суммы, комиссия, доступные лоты (без выставления)')
     .argument('<query>', 'тикер или ISIN инструмента')
     .requiredOption('-q, --lots <n>', 'количество лотов')
-    .option('--price <price>', 'лимитная цена (без неё — оценка по последней рыночной)')
+    .option(
+      '--price <price>',
+      'лимитная цена (без неё — оценка по последней рыночной); облигации/фьючерсы — в пунктах (% номинала)',
+    )
     .option('--direction <dir>', 'направление: buy | sell', 'buy')
     .option('-a, --account <id>', 'идентификатор счёта')
     .action(
@@ -175,7 +183,7 @@ export function registerTradingCommands(program: Command): void {
     .description('заменить лимитную заявку: новые количество и цена')
     .argument('<orderId>', 'номер заменяемой заявки')
     .requiredOption('-q, --lots <n>', 'новое количество лотов')
-    .requiredOption('--price <price>', 'новая лимитная цена')
+    .requiredOption('--price <price>', 'новая лимитная цена (облигации/фьючерсы — в пунктах, % номинала)')
     .option('-a, --account <id>', 'идентификатор счёта')
     .option('--confirm', 'подтверждение (обязателен в режиме full)')
     .option('--order-id <id>', 'свой ключ идемпотентности замены (для безопасного повтора)')
@@ -210,8 +218,11 @@ export function registerTradingCommands(program: Command): void {
     .argument('<query>', 'тикер или ISIN инструмента')
     .requiredOption('-q, --lots <n>', 'количество лотов')
     .requiredOption('--type <kind>', 'тип: take-profit | stop-loss | stop-limit')
-    .requiredOption('--stop-price <price>', 'цена активации')
-    .option('--price <price>', 'лимитная цена после активации (обязательна для stop-limit)')
+    .requiredOption('--stop-price <price>', 'цена активации (облигации/фьючерсы — в пунктах, % номинала)')
+    .option(
+      '--price <price>',
+      'лимитная цена после активации (обязательна для stop-limit; облигации/фьючерсы — в пунктах)',
+    )
     .option('--direction <dir>', 'направление: buy | sell', 'sell')
     .option('-a, --account <id>', 'идентификатор счёта')
     .option('--confirm', 'подтверждение (обязателен в режиме full)')

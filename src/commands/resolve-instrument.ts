@@ -6,8 +6,8 @@
  * - InstrumentSearchApi — контракт клиента (только findInstrument);
  * - resolveInstrument(api, query, options) — точное совпадение по тикеру
  *   или ISIN с приоритетом основной торговой сессии МосБиржи;
- * - resolveLabelByFigi(api, figi) — тикер/имя по FIGI для ответов, где API
- *   не отдаёт ticker (replace, stop-list); null, если не найден;
+ * - resolveLabelByFigi(api, figi) — тикер/имя/тип инструмента по FIGI для
+ *   ответов, где API не отдаёт ticker (replace, stop-list); null, если не найден;
  * - MarketInstrumentApi — контракт для рыночных команд (findInstrument +
  *   getIndicatives);
  * - ResolvedMarketInstrument — унифицированный результат рыночного резолва
@@ -106,21 +106,25 @@ export async function resolveInstrument(
   return typed[0]!;
 }
 
-// Резолв тикера/имени по FIGI. Ответы ReplaceOrder и GetStopOrders не содержат
-// ticker (только figi/instrumentUid), поэтому для читаемого вывода бумагу
-// приходится доставать отдельно; FindInstrument принимает figi как запрос.
+// Резолв тикера/имени/типа по FIGI. Ответы ReplaceOrder и GetStopOrders не
+// содержат ticker (только figi/instrumentUid), поэтому для читаемого вывода
+// бумагу приходится доставать отдельно; FindInstrument принимает figi как запрос.
+// instrumentType здесь — не презентация: по нему replaceOrder выбирает priceType
+// (пункты для облигаций/фьючерсов vs валюта), поэтому поле возвращаем всегда.
 // null — не нашли (тогда UI оставляет исходный идентификатор): это презентация,
 // а не обязательные данные, поэтому деградация допустима (см. вызовы).
 export async function resolveLabelByFigi(
   api: InstrumentSearchApi,
   figi: string,
-): Promise<{ ticker: string; name: string } | null> {
+): Promise<{ uid: string; ticker: string; name: string; instrumentType: string } | null> {
   if (!figi) {
     return null;
   }
   const { instruments } = await api.findInstrument(figi);
   const match = instruments.find((i) => i.figi === figi);
-  return match ? { ticker: match.ticker, name: match.name } : null;
+  return match
+    ? { uid: match.uid, ticker: match.ticker, name: match.name, instrumentType: match.instrumentType }
+    : null;
 }
 
 // Контракт для рыночных команд (history/quote/tech/orderbook): обычный поиск

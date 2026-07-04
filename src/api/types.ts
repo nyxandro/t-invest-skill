@@ -153,6 +153,12 @@ export interface SandboxPayInResponse {
   balance: MoneyValue;
 }
 
+// Закрытие sandbox-счёта: ответ пустой (подтверждение — отсутствие ошибки).
+export type CloseSandboxAccountResponse = Record<string, never>;
+
+// Список sandbox-счетов повторяет контракт UsersService/GetAccounts.
+export type GetSandboxAccountsResponse = GetAccountsResponse;
+
 // --- OperationsService/GetOperationsByCursor ---
 
 // Элемент курсорной выдачи операций. Богаче устаревшего GetOperations:

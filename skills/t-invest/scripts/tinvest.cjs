@@ -1194,7 +1194,7 @@ var require_command = __commonJS({
     var EventEmitter = require("node:events").EventEmitter;
     var childProcess = require("node:child_process");
     var path8 = require("node:path");
-    var fs5 = require("node:fs");
+    var fs6 = require("node:fs");
     var process2 = require("node:process");
     var { Argument: Argument2, humanReadableArgName } = require_argument();
     var { CommanderError: CommanderError2 } = require_error();
@@ -2188,7 +2188,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
        * @param {string} subcommandName
        */
       _checkForMissingExecutable(executableFile, executableDir, subcommandName) {
-        if (fs5.existsSync(executableFile)) return;
+        if (fs6.existsSync(executableFile)) return;
         const executableDirMessage = executableDir ? `searched for local subcommand relative to directory '${executableDir}'` : "no directory for search for local subcommand, use .executableDir() to supply a custom directory";
         const executableMissing = `'${executableFile}' does not exist
  - if '${subcommandName}' is not meant to be an executable command, remove description parameter from '.command()' and use '.description()' instead
@@ -2207,10 +2207,10 @@ Expecting one of '${allowedValues.join("', '")}'`);
         const sourceExt = [".js", ".ts", ".tsx", ".mjs", ".cjs"];
         function findFile(baseDir, baseName) {
           const localBin = path8.resolve(baseDir, baseName);
-          if (fs5.existsSync(localBin)) return localBin;
+          if (fs6.existsSync(localBin)) return localBin;
           if (sourceExt.includes(path8.extname(baseName))) return void 0;
           const foundExt = sourceExt.find(
-            (ext) => fs5.existsSync(`${localBin}${ext}`)
+            (ext) => fs6.existsSync(`${localBin}${ext}`)
           );
           if (foundExt) return `${localBin}${foundExt}`;
           return void 0;
@@ -2222,7 +2222,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
         if (this._scriptPath) {
           let resolvedScriptPath;
           try {
-            resolvedScriptPath = fs5.realpathSync(this._scriptPath);
+            resolvedScriptPath = fs6.realpathSync(this._scriptPath);
           } catch {
             resolvedScriptPath = this._scriptPath;
           }
@@ -3459,7 +3459,7 @@ var require_commander = __commonJS({
 // node_modules/dotenv/lib/main.js
 var require_main = __commonJS({
   "node_modules/dotenv/lib/main.js"(exports2, module2) {
-    var fs5 = require("fs");
+    var fs6 = require("fs");
     var path8 = require("path");
     var os3 = require("os");
     var crypto = require("crypto");
@@ -3591,7 +3591,7 @@ var require_main = __commonJS({
       if (options && options.path && options.path.length > 0) {
         if (Array.isArray(options.path)) {
           for (const filepath of options.path) {
-            if (fs5.existsSync(filepath)) {
+            if (fs6.existsSync(filepath)) {
               possibleVaultPath = filepath.endsWith(".vault") ? filepath : `${filepath}.vault`;
             }
           }
@@ -3601,7 +3601,7 @@ var require_main = __commonJS({
       } else {
         possibleVaultPath = path8.resolve(process.cwd(), ".env.vault");
       }
-      if (fs5.existsSync(possibleVaultPath)) {
+      if (fs6.existsSync(possibleVaultPath)) {
         return possibleVaultPath;
       }
       return null;
@@ -3654,7 +3654,7 @@ var require_main = __commonJS({
       const parsedAll = {};
       for (const path9 of optionPaths) {
         try {
-          const parsed = DotenvModule.parse(fs5.readFileSync(path9, { encoding }));
+          const parsed = DotenvModule.parse(fs6.readFileSync(path9, { encoding }));
           DotenvModule.populate(parsedAll, parsed, options);
         } catch (e) {
           if (debug) {
@@ -3792,64 +3792,6 @@ var {
   Help
 } = import_index.default;
 
-// src/api/money.ts
-var NANO_PER_UNIT = 1e9;
-var CURRENCY_SYMBOLS = {
-  rub: "\u20BD",
-  usd: "$",
-  eur: "\u20AC",
-  cny: "\xA5",
-  gbp: "\xA3"
-};
-function quotationToNumber(q) {
-  return Number(q.units) + q.nano / NANO_PER_UNIT;
-}
-function quotationToNumberOrNull(q) {
-  return q === void 0 ? null : quotationToNumber(q);
-}
-function moneyToNumberOrNull(m) {
-  return m === void 0 ? null : quotationToNumber(m);
-}
-function numberToQuotation(value) {
-  let units = Math.trunc(value);
-  let nano = Math.round((value - units) * NANO_PER_UNIT);
-  if (nano >= NANO_PER_UNIT) {
-    units += 1;
-    nano -= NANO_PER_UNIT;
-  } else if (nano <= -NANO_PER_UNIT) {
-    units -= 1;
-    nano += NANO_PER_UNIT;
-  }
-  return { units: String(units), nano };
-}
-function moneyToNumber(m) {
-  return quotationToNumber(m);
-}
-function round(value, digits = 2) {
-  const factor = 10 ** digits;
-  return Math.round(value * factor) / factor + 0;
-}
-function formatAmount(value, fractionDigits = 2) {
-  const fixed = value.toFixed(fractionDigits);
-  const negative = fixed.startsWith("-");
-  const [intPart = "", fracPart] = (negative ? fixed.slice(1) : fixed).split(".");
-  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-  const sign = negative ? "-" : "";
-  return fracPart ? `${sign}${grouped}.${fracPart}` : `${sign}${grouped}`;
-}
-function formatSigned(value, fractionDigits = 2) {
-  return value >= 0 ? `+${formatAmount(value, fractionDigits)}` : formatAmount(value, fractionDigits);
-}
-function currencySymbol(code) {
-  return CURRENCY_SYMBOLS[code.toLowerCase()] ?? code.toUpperCase();
-}
-function formatMoney(m) {
-  return `${formatAmount(moneyToNumber(m))} ${currencySymbol(m.currency)}`;
-}
-
-// src/catalog/instrument-catalog.ts
-var import_node_path3 = __toESM(require("node:path"), 1);
-
 // src/config/config.ts
 var import_node_os = __toESM(require("node:os"), 1);
 var import_node_path = __toESM(require("node:path"), 1);
@@ -3881,8 +3823,16 @@ var TRUTHY_FLAG_VALUES = ["true", "1", "yes", "on"];
 var T_INVEST_BASE_URL = "https://invest-public-api.tinkoff.ru/rest";
 var T_INVEST_SANDBOX_BASE_URL = "https://sandbox-invest-public-api.tinkoff.ru/rest";
 var REQUEST_TIMEOUT_MS = 3e4;
-var MS_PER_DAY = 24 * 60 * 60 * 1e3;
+var APP_VERSION = "1.1.0";
+var UPDATE_CHECK_URL = "https://raw.githubusercontent.com/nyxandro/t-invest-skill/main/package.json";
+var UPDATE_CHECK_TTL_MS = 24 * 60 * 60 * 1e3;
+var UPDATE_CHECK_TIMEOUT_MS = 2500;
+var UPDATE_CHECK_CACHE_PATH = import_node_path.default.join(import_node_os.default.homedir(), ".config", "tinvest", "update-check.json");
+var MS_PER_HOUR = 60 * 60 * 1e3;
+var MS_PER_DAY = 24 * MS_PER_HOUR;
 var MS_PER_YEAR = 365 * MS_PER_DAY;
+var SCHEDULE_DEFAULT_DAYS = 7;
+var LAST_TRADES_DEFAULT_HOURS = 1;
 var DEFAULT_OPERATIONS_DAYS = 30;
 var OPERATIONS_PAGE_LIMIT = 1e3;
 var MAX_OPERATIONS_PAGES = 100;
@@ -3981,6 +3931,64 @@ function resolveTradingGate(env) {
   const allowTrading = stonksMode || parseBooleanFlag(env[TRADING_ENABLE_ENV_VAR]);
   return { allowTrading, stonksMode };
 }
+
+// src/api/money.ts
+var NANO_PER_UNIT = 1e9;
+var CURRENCY_SYMBOLS = {
+  rub: "\u20BD",
+  usd: "$",
+  eur: "\u20AC",
+  cny: "\xA5",
+  gbp: "\xA3"
+};
+function quotationToNumber(q) {
+  return Number(q.units) + q.nano / NANO_PER_UNIT;
+}
+function quotationToNumberOrNull(q) {
+  return q === void 0 ? null : quotationToNumber(q);
+}
+function moneyToNumberOrNull(m) {
+  return m === void 0 ? null : quotationToNumber(m);
+}
+function numberToQuotation(value) {
+  let units = Math.trunc(value);
+  let nano = Math.round((value - units) * NANO_PER_UNIT);
+  if (nano >= NANO_PER_UNIT) {
+    units += 1;
+    nano -= NANO_PER_UNIT;
+  } else if (nano <= -NANO_PER_UNIT) {
+    units -= 1;
+    nano += NANO_PER_UNIT;
+  }
+  return { units: String(units), nano };
+}
+function moneyToNumber(m) {
+  return quotationToNumber(m);
+}
+function round(value, digits = 2) {
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor + 0;
+}
+function formatAmount(value, fractionDigits = 2) {
+  const fixed = value.toFixed(fractionDigits);
+  const negative = fixed.startsWith("-");
+  const [intPart = "", fracPart] = (negative ? fixed.slice(1) : fixed).split(".");
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  const sign = negative ? "-" : "";
+  return fracPart ? `${sign}${grouped}.${fracPart}` : `${sign}${grouped}`;
+}
+function formatSigned(value, fractionDigits = 2) {
+  return value >= 0 ? `+${formatAmount(value, fractionDigits)}` : formatAmount(value, fractionDigits);
+}
+function currencySymbol(code) {
+  return CURRENCY_SYMBOLS[code.toLowerCase()] ?? code.toUpperCase();
+}
+function formatMoney(m) {
+  return `${formatAmount(moneyToNumber(m))} ${currencySymbol(m.currency)}`;
+}
+
+// src/catalog/instrument-catalog.ts
+var import_node_path3 = __toESM(require("node:path"), 1);
 
 // src/catalog/file-cache.ts
 var import_node_fs = __toESM(require("node:fs"), 1);
@@ -4419,6 +4427,13 @@ function formatMoscowDate(iso) {
     return iso;
   }
   return `${p.year}-${pad2(p.month)}-${pad2(p.day)}`;
+}
+function formatMoscowTime(iso) {
+  const p = moscowParts(iso);
+  if (!p) {
+    return iso;
+  }
+  return `${pad2(p.hours)}:${pad2(p.minutes)}`;
 }
 
 // src/util/concurrency.ts
@@ -5219,6 +5234,16 @@ var TInvestClient = class {
   getTechAnalysis(request) {
     return this.call("MarketDataService/GetTechAnalysis", request);
   }
+  getTradingSchedules(exchange, from, to) {
+    return this.call("InstrumentsService/TradingSchedules", {
+      ...exchange ? { exchange } : {},
+      from,
+      to
+    });
+  }
+  getLastTrades(instrumentId, from, to) {
+    return this.call("MarketDataService/GetLastTrades", { instrumentId, from, to });
+  }
   getFuturesMargin(instrumentId) {
     return this.call("InstrumentsService/GetFuturesMargin", { instrumentId });
   }
@@ -5255,6 +5280,12 @@ var TInvestClient = class {
   }
   openSandboxAccount() {
     return this.call("SandboxService/OpenSandboxAccount", {});
+  }
+  getSandboxAccounts() {
+    return this.call("SandboxService/GetSandboxAccounts", {});
+  }
+  closeSandboxAccount(accountId) {
+    return this.call("SandboxService/CloseSandboxAccount", { accountId });
   }
   sandboxPayIn(accountId, amountRub) {
     return this.call("SandboxService/SandboxPayIn", {
@@ -5445,7 +5476,7 @@ async function runCommand(cmd, fn) {
 async function runSessionCommand(cmd, fn) {
   try {
     const { json } = cmd.optsWithGlobals();
-    const result = fn(Boolean(json));
+    const result = await fn(Boolean(json));
     console.log(typeof result === "string" ? result : JSON.stringify(result, null, 2));
   } catch (err) {
     printErrorAndExit(err);
@@ -5604,7 +5635,7 @@ async function resolveLabelByFigi(api, figi) {
   }
   const { instruments } = await api.findInstrument(figi);
   const match = instruments.find((i) => i.figi === figi);
-  return match ? { ticker: match.ticker, name: match.name } : null;
+  return match ? { uid: match.uid, ticker: match.ticker, name: match.name, instrumentType: match.instrumentType } : null;
 }
 async function resolveMarketInstrument(api, query, options = {}) {
   try {
@@ -6903,6 +6934,77 @@ function renderInstrumentCard(view) {
   return lines.join("\n");
 }
 
+// src/format/units.ts
+var POINT_PRICED_INSTRUMENT_TYPES = ["bond", "futures"];
+var POINTS_LABEL = "\u043F\u0442";
+var POINTS_CURRENCY_TOKENS = ["pt.", "pt", "point", "points"];
+var POINTS_PER_NOMINAL = 100;
+function priceUnitFor(instrumentType) {
+  return POINT_PRICED_INSTRUMENT_TYPES.includes(instrumentType) ? "point" : "currency";
+}
+function isPointsCurrency(currency) {
+  return typeof currency === "string" && POINTS_CURRENCY_TOKENS.includes(currency.toLowerCase());
+}
+function formatInstrumentPrice(value, opts) {
+  if (opts.unit === "currency") {
+    return opts.currency ? `${formatAmount(value)} ${currencySymbol(opts.currency)}` : formatAmount(value);
+  }
+  const base = `${formatAmount(value)} ${POINTS_LABEL}`;
+  if (opts.nominalRub === null || opts.nominalRub === void 0) {
+    return base;
+  }
+  const rubPerUnit = value / POINTS_PER_NOMINAL * opts.nominalRub;
+  return `${base} (\u2248 ${formatAmount(rubPerUnit)} \u20BD/\u0448\u0442)`;
+}
+function formatMoneyAmount(value, currency) {
+  if (isPointsCurrency(currency)) {
+    return `${formatAmount(value)} ${POINTS_LABEL}`;
+  }
+  return currency ? `${formatAmount(value)} ${currencySymbol(currency)}` : formatAmount(value);
+}
+
+// src/commands/last-trades.ts
+var TRADE_DIRECTION_LABELS = {
+  TRADE_DIRECTION_BUY: "\u043F\u043E\u043A\u0443\u043F\u043A\u0430",
+  TRADE_DIRECTION_SELL: "\u043F\u0440\u043E\u0434\u0430\u0436\u0430"
+};
+async function fetchLastTrades(api, params) {
+  const instrument = await resolveMarketInstrument(api, params.query);
+  const from = new Date(params.now.getTime() - params.hours * MS_PER_HOUR).toISOString();
+  const to = params.now.toISOString();
+  const resp = await api.getLastTrades(instrument.uid, from, to);
+  const trades = resp.trades ?? [];
+  return {
+    ticker: instrument.ticker,
+    name: instrument.name,
+    // instrumentType у индикативов может быть null — тогда трактуем как валюту.
+    priceUnit: instrument.instrumentType ? priceUnitFor(instrument.instrumentType) : "currency",
+    currency: instrument.currency,
+    trades: trades.map((t) => ({
+      time: t.time ?? null,
+      direction: t.direction ? TRADE_DIRECTION_LABELS[t.direction] ?? t.direction : null,
+      price: quotationToNumberOrNull(t.price),
+      quantity: t.quantity ? Number(t.quantity) : null
+    }))
+  };
+}
+function renderLastTrades(view) {
+  if (view.trades.length === 0) {
+    return `${view.name} (${view.ticker}): \u0437\u0430 \u0432\u044B\u0431\u0440\u0430\u043D\u043D\u044B\u0439 \u043F\u0435\u0440\u0438\u043E\u0434 \u043E\u0431\u0435\u0437\u043B\u0438\u0447\u0435\u043D\u043D\u044B\u0445 \u0441\u0434\u0435\u043B\u043E\u043A \u043D\u0435\u0442.`;
+  }
+  const table = renderTable(
+    ["\u0412\u0440\u0435\u043C\u044F (\u041C\u0421\u041A)", "\u041D\u0430\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0438\u0435", "\u0426\u0435\u043D\u0430", "\u041B\u043E\u0442\u044B"],
+    view.trades.map((t) => [
+      t.time ? formatMoscowDateTime(t.time) : DASH,
+      t.direction ?? DASH,
+      t.price !== null ? formatInstrumentPrice(t.price, { unit: view.priceUnit, nominalRub: null, currency: view.currency }) : DASH,
+      t.quantity !== null ? String(t.quantity) : DASH
+    ])
+  );
+  return `${view.name} (${view.ticker}) \u2014 \u043E\u0431\u0435\u0437\u043B\u0438\u0447\u0435\u043D\u043D\u044B\u0435 \u0441\u0434\u0435\u043B\u043A\u0438:
+${table}`;
+}
+
 // src/commands/orderbook.ts
 function toLevels(entries) {
   return (entries ?? []).filter((e) => e.price !== void 0 && e.quantity !== void 0).map((e) => ({ price: quotationToNumber(e.price), quantity: Number(e.quantity) }));
@@ -6957,6 +7059,56 @@ function renderOrderBook(view) {
   );
   lines.push(table);
   return lines.join("\n");
+}
+
+// src/commands/schedule.ts
+function sessionRange(start, end) {
+  if (!start || !end) {
+    return null;
+  }
+  return `${formatMoscowTime(start)}\u2013${formatMoscowTime(end)}`;
+}
+async function fetchSchedule(api, params) {
+  const from = params.now.toISOString();
+  const to = new Date(params.now.getTime() + params.days * MS_PER_DAY).toISOString();
+  const resp = await api.getTradingSchedules(params.exchange, from, to);
+  const exchanges = resp.exchanges ?? [];
+  if (exchanges.length === 0) {
+    throw new AppError({
+      code: "APP_TINVEST_SCHEDULE_UNAVAILABLE",
+      userMessage: params.exchange ? `\u0420\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435 \u0442\u043E\u0440\u0433\u043E\u0432 \u0434\u043B\u044F \u043F\u043B\u043E\u0449\u0430\u0434\u043A\u0438 \xAB${params.exchange}\xBB \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u043E \u2014 \u043F\u0440\u043E\u0432\u0435\u0440\u044C\u0442\u0435 \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u0435 \u043F\u043B\u043E\u0449\u0430\u0434\u043A\u0438 \u0438\u043B\u0438 \u0437\u0430\u043F\u0440\u043E\u0441\u0438\u0442\u0435 \u0431\u0435\u0437 \u043D\u0435\u0433\u043E (\u043F\u043E\u043A\u0430\u0436\u0435\u0442 \u0432\u0441\u0435).` : "\u0420\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435 \u0442\u043E\u0440\u0433\u043E\u0432 \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u043E \u0437\u0430 \u0443\u043A\u0430\u0437\u0430\u043D\u043D\u044B\u0439 \u043F\u0435\u0440\u0438\u043E\u0434."
+    });
+  }
+  return {
+    exchanges: exchanges.map((e) => ({
+      exchange: e.exchange ?? DASH,
+      days: (e.days ?? []).map((d) => {
+        const trading = d.isTradingDay ?? false;
+        return {
+          date: d.date ? formatMoscowDate(d.date) : null,
+          isTradingDay: trading,
+          // Сессии показываем только у торговых дней.
+          mainSession: trading ? sessionRange(d.startTime, d.endTime) : null,
+          eveningSession: trading ? sessionRange(d.eveningStartTime, d.eveningEndTime) : null
+        };
+      })
+    }))
+  };
+}
+function renderSchedule(view) {
+  return view.exchanges.map((e) => {
+    const table = renderTable(
+      ["\u0414\u0430\u0442\u0430", "\u0422\u043E\u0440\u0433\u0438", "\u041E\u0441\u043D\u043E\u0432\u043D\u0430\u044F (\u041C\u0421\u041A)", "\u0412\u0435\u0447\u0435\u0440\u043D\u044F\u044F (\u041C\u0421\u041A)"],
+      e.days.map((d) => [
+        d.date ?? DASH,
+        d.isTradingDay ? "\u0434\u0430" : "\u043D\u0435\u0442",
+        d.mainSession ?? DASH,
+        d.eveningSession ?? DASH
+      ])
+    );
+    return `\u041F\u043B\u043E\u0449\u0430\u0434\u043A\u0430: ${e.exchange}
+${table}`;
+  }).join("\n\n");
 }
 
 // src/commands/tech.ts
@@ -7090,6 +7242,26 @@ function registerMarketCommands(program3) {
     async (query, _opts, cmd) => runCommand(cmd, async (client, json) => {
       const view = await fetchTech(client, query, /* @__PURE__ */ new Date());
       return json ? view : renderTech(view);
+    })
+  );
+  program3.command("schedule").description("\u0440\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435 \u0442\u043E\u0440\u0433\u043E\u0432 \u043F\u043B\u043E\u0449\u0430\u0434\u043E\u043A: \u043A\u043E\u0433\u0434\u0430 \u043E\u0442\u043A\u0440\u044B\u0442\u044B \u0441\u0435\u0441\u0441\u0438\u0438 (\u0432\u0440\u0435\u043C\u044F \u0432 \u041C\u0421\u041A)").argument("[exchange]", "\u043F\u043B\u043E\u0449\u0430\u0434\u043A\u0430 (\u043D\u0430\u043F\u0440\u0438\u043C\u0435\u0440, MOEX); \u0431\u0435\u0437 \u043D\u0435\u0451 \u2014 \u0432\u0441\u0435 \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u044B\u0435").option("-d, --days <n>", "\u043F\u0435\u0440\u0438\u043E\u0434 \u0432\u043F\u0435\u0440\u0451\u0434 \u0432 \u0434\u043D\u044F\u0445", String(SCHEDULE_DEFAULT_DAYS)).action(
+    async (exchange, opts, cmd) => runCommand(cmd, async (client, json) => {
+      const view = await fetchSchedule(client, {
+        exchange,
+        days: parsePositiveInt(opts.days, "--days"),
+        now: /* @__PURE__ */ new Date()
+      });
+      return json ? view : renderSchedule(view);
+    })
+  );
+  program3.command("last-trades").description("\u043B\u0435\u043D\u0442\u0430 \u043E\u0431\u0435\u0437\u043B\u0438\u0447\u0435\u043D\u043D\u044B\u0445 \u0441\u0434\u0435\u043B\u043E\u043A \u0440\u044B\u043D\u043A\u0430 \u043F\u043E \u0431\u0443\u043C\u0430\u0433\u0435 (\u043E\u0446\u0435\u043D\u043A\u0430 \u0430\u043A\u0442\u0438\u0432\u043D\u043E\u0441\u0442\u0438/\u043B\u0438\u043A\u0432\u0438\u0434\u043D\u043E\u0441\u0442\u0438)").argument("<query>", "\u0442\u0438\u043A\u0435\u0440 \u0438\u043B\u0438 ISIN \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430").option("--hours <n>", "\u043F\u0435\u0440\u0438\u043E\u0434 \u043D\u0430\u0437\u0430\u0434 \u0432 \u0447\u0430\u0441\u0430\u0445", String(LAST_TRADES_DEFAULT_HOURS)).action(
+    async (query, opts, cmd) => runCommand(cmd, async (client, json) => {
+      const view = await fetchLastTrades(client, {
+        query,
+        hours: parsePositiveInt(opts.hours, "--hours"),
+        now: /* @__PURE__ */ new Date()
+      });
+      return json ? view : renderLastTrades(view);
     })
   );
 }
@@ -7537,8 +7709,99 @@ function registerScreenCommands(program3) {
   );
 }
 
+// src/commands/update-check.ts
+var import_node_fs4 = __toESM(require("node:fs"), 1);
+function parseVersion(value) {
+  const normalized = value.trim().replace(/^v/i, "");
+  if (!/^\d+(\.\d+)*$/.test(normalized)) {
+    return null;
+  }
+  return normalized.split(".").map(Number);
+}
+function isNewer(latest, current) {
+  const a = parseVersion(latest);
+  const b = parseVersion(current);
+  if (!a || !b) {
+    return false;
+  }
+  const length = Math.max(a.length, b.length);
+  for (let i = 0; i < length; i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x > y) {
+      return true;
+    }
+    if (x < y) {
+      return false;
+    }
+  }
+  return false;
+}
+function readCache(cachePath) {
+  try {
+    const raw = import_node_fs4.default.readFileSync(cachePath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (typeof parsed.checkedAt === "string" && typeof parsed.latestVersion === "string") {
+      return { checkedAt: parsed.checkedAt, latestVersion: parsed.latestVersion };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+function writeCache2(cachePath, cache) {
+  try {
+    import_node_fs4.default.writeFileSync(cachePath, JSON.stringify(cache), "utf8");
+  } catch {
+  }
+}
+async function fetchLatestVersion(fetchFn) {
+  try {
+    const response = await fetchFn(UPDATE_CHECK_URL, { signal: AbortSignal.timeout(UPDATE_CHECK_TIMEOUT_MS) });
+    if (!response.ok) {
+      return null;
+    }
+    const pkg = await response.json();
+    return typeof pkg.version === "string" ? pkg.version : null;
+  } catch {
+    return null;
+  }
+}
+async function checkForUpdate(deps = {}) {
+  const now = deps.now ?? /* @__PURE__ */ new Date();
+  const cachePath = deps.cachePath ?? UPDATE_CHECK_CACHE_PATH;
+  const fetchFn = deps.fetchFn ?? fetch;
+  const current = APP_VERSION;
+  const cache = readCache(cachePath);
+  const cacheFresh = cache !== null && now.getTime() - Date.parse(cache.checkedAt) < UPDATE_CHECK_TTL_MS;
+  let latestVersion;
+  if (cacheFresh && cache) {
+    latestVersion = cache.latestVersion;
+  } else {
+    latestVersion = await fetchLatestVersion(fetchFn);
+    if (latestVersion !== null) {
+      writeCache2(cachePath, { checkedAt: now.toISOString(), latestVersion });
+    } else if (cache) {
+      latestVersion = cache.latestVersion;
+    }
+  }
+  return {
+    currentVersion: current,
+    latestVersion,
+    updateAvailable: latestVersion !== null && isNewer(latestVersion, current)
+  };
+}
+
 // src/cli/register-session.ts
 var STONKS_WARNING = "\u26A0\uFE0F \u0412\u043A\u043B\u044E\u0447\u0451\u043D stonks-\u0440\u0435\u0436\u0438\u043C (T_INVEST_STONKS_MODE): \u0430\u0433\u0435\u043D\u0442 \u043C\u043E\u0436\u0435\u0442 \u0441\u043E\u0432\u0435\u0440\u0448\u0430\u0442\u044C \u0441\u0434\u0435\u043B\u043A\u0438 \u0440\u0435\u0430\u043B\u044C\u043D\u044B\u043C\u0438 \u0434\u0435\u043D\u044C\u0433\u0430\u043C\u0438 \u0411\u0415\u0417 \u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043D\u0438\u0439. \u0412\u044B \u043F\u0435\u0440\u0435\u0434\u0430\u0451\u0442\u0435 \u043F\u043E\u043B\u043D\u044B\u0439 \u0430\u0432\u0442\u043E\u043D\u043E\u043C\u043D\u044B\u0439 \u0434\u043E\u0441\u0442\u0443\u043F \u043A \u0441\u0447\u0451\u0442\u0443 \u2014 \u043E\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0435\u043D\u043D\u043E\u0441\u0442\u044C \u043D\u0430 \u0432\u0430\u0441, \u044D\u0442\u043E \u043D\u0435\u0431\u0435\u0437\u043E\u043F\u0430\u0441\u043D\u043E.";
+function assertSandboxMode(mode, command) {
+  if (mode !== "sandbox") {
+    throw new AppError({
+      code: "APP_TINVEST_SANDBOX_ONLY",
+      userMessage: `\u041A\u043E\u043C\u0430\u043D\u0434\u0430 \xAB${command}\xBB \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0432 \u0440\u0435\u0436\u0438\u043C\u0435 \u043F\u0435\u0441\u043E\u0447\u043D\u0438\u0446\u044B. \u0417\u0430\u0444\u0438\u043A\u0441\u0438\u0440\u0443\u0439\u0442\u0435 \u0440\u0435\u0436\u0438\u043C: session start --mode sandbox.`
+    });
+  }
+}
 function tradingStatusLine(gate) {
   if (gate.stonksMode) {
     return "\u0420\u0435\u0430\u043B\u044C\u043D\u044B\u0435 \u0441\u0434\u0435\u043B\u043A\u0438: STONKS \u2014 \u0432\u044B\u043F\u043E\u043B\u043D\u044F\u044E\u0442\u0441\u044F \u0411\u0415\u0417 \u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043D\u0438\u0439.";
@@ -7575,12 +7838,13 @@ function registerSessionCommands(program3) {
     })
   );
   session.command("status").description("\u043F\u043E\u043A\u0430\u0437\u0430\u0442\u044C \u0430\u043A\u0442\u0438\u0432\u043D\u044B\u0439 \u0440\u0435\u0436\u0438\u043C, \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u043E\u0441\u0442\u044C \u0442\u043E\u043A\u0435\u043D\u043E\u0432 \u0438 \u0441\u043E\u0441\u0442\u043E\u044F\u043D\u0438\u0435 \u0433\u0435\u0439\u0442\u0430 \u0442\u043E\u0440\u0433\u043E\u0432\u043B\u0438").action(
-    async (_opts, cmd) => runSessionCommand(cmd, (json) => {
+    async (_opts, cmd) => runSessionCommand(cmd, async (json) => {
       const state = readActiveMode(activeModeStatePath(process.env));
       const tokens = tokenAvailability(process.env);
       const gate = resolveTradingGate(process.env);
       const sessionId = process.env[SESSION_ID_ENV_VAR]?.trim() || null;
       const warning = gate.stonksMode ? STONKS_WARNING : null;
+      const update = await checkForUpdate();
       if (json) {
         return {
           active: state !== null,
@@ -7591,12 +7855,23 @@ function registerSessionCommands(program3) {
           tradingAllowed: gate.allowTrading,
           stonksMode: gate.stonksMode,
           warning,
-          tokenEnvPath: GLOBAL_ENV_PATH
+          tokenEnvPath: GLOBAL_ENV_PATH,
+          currentVersion: update.currentVersion,
+          latestVersion: update.latestVersion,
+          updateAvailable: update.updateAvailable
         };
       }
       const tokensLine = Object.entries(tokens).map(([mode, ok]) => `${mode}: ${ok ? "\u2713" : "\u2717 (\u0442\u043E\u043A\u0435\u043D \u043D\u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043D)"}`).join(", ");
       const modeLine = state ? `\u0410\u043A\u0442\u0438\u0432\u043D\u044B\u0439 \u0440\u0435\u0436\u0438\u043C: \xAB${state.mode}\xBB (\u0437\u0430\u0444\u0438\u043A\u0441\u0438\u0440\u043E\u0432\u0430\u043D ${state.startedAt}).` : "\u0410\u043A\u0442\u0438\u0432\u043D\u044B\u0439 \u0440\u0435\u0436\u0438\u043C \u043D\u0435 \u0432\u044B\u0431\u0440\u0430\u043D \u2014 \u0432\u044B\u043F\u043E\u043B\u043D\u0438\u0442\u0435 \xABsession start\xBB (\u043F\u043E \u0443\u043C\u043E\u043B\u0447\u0430\u043D\u0438\u044E readonly).";
-      return [modeLine, `\u0422\u043E\u043A\u0435\u043D\u044B: ${tokensLine}`, tradingStatusLine(gate), warning, `\u0424\u0430\u0439\u043B \u0442\u043E\u043A\u0435\u043D\u043E\u0432: ${GLOBAL_ENV_PATH}`].filter(Boolean).join("\n");
+      const updateLine = update.updateAvailable ? `\u{1F514} \u0414\u043E\u0441\u0442\u0443\u043F\u043D\u0430 \u043D\u043E\u0432\u0430\u044F \u0432\u0435\u0440\u0441\u0438\u044F \u0441\u043A\u0438\u043B\u043B\u0430: ${update.latestVersion} (\u0443 \u0432\u0430\u0441 ${update.currentVersion}). \u041E\u0431\u043D\u043E\u0432\u0438\u0442\u044C: curl -fsSL https://raw.githubusercontent.com/nyxandro/t-invest-skill/main/install.sh | bash` : null;
+      return [
+        modeLine,
+        `\u0422\u043E\u043A\u0435\u043D\u044B: ${tokensLine}`,
+        tradingStatusLine(gate),
+        warning,
+        `\u0424\u0430\u0439\u043B \u0442\u043E\u043A\u0435\u043D\u043E\u0432: ${GLOBAL_ENV_PATH}`,
+        updateLine
+      ].filter(Boolean).join("\n");
     })
   );
   session.command("end").description("\u0441\u043D\u044F\u0442\u044C \u0444\u0438\u043A\u0441\u0430\u0446\u0438\u044E \u0430\u043A\u0442\u0438\u0432\u043D\u043E\u0433\u043E \u0440\u0435\u0436\u0438\u043C\u0430 (\u0441\u043B\u0435\u0434\u0443\u044E\u0449\u0430\u044F \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u043F\u043E\u0442\u0440\u0435\u0431\u0443\u0435\u0442 \u0437\u0430\u043D\u043E\u0432\u043E \u0432\u044B\u0431\u0440\u0430\u0442\u044C \u0440\u0435\u0436\u0438\u043C)").action(
@@ -7611,17 +7886,29 @@ function registerSessionCommands(program3) {
   const sandbox = program3.command("sandbox").description("\u0443\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0438\u0435 \u043F\u0435\u0441\u043E\u0447\u043D\u0438\u0446\u0435\u0439 (\u0432\u0438\u0440\u0442\u0443\u0430\u043B\u044C\u043D\u044B\u0439 \u0441\u0447\u0451\u0442)");
   sandbox.command("init").description("\u043E\u0442\u043A\u0440\u044B\u0442\u044C \u0441\u0447\u0451\u0442 \u0432 \u043F\u0435\u0441\u043E\u0447\u043D\u0438\u0446\u0435 \u0438 \u043F\u043E\u043F\u043E\u043B\u043D\u0438\u0442\u044C \u0435\u0433\u043E \u0440\u0443\u0431\u043B\u044F\u043C\u0438").option("--amount <rub>", "\u0441\u0443\u043C\u043C\u0430 \u043F\u043E\u043F\u043E\u043B\u043D\u0435\u043D\u0438\u044F \u0432 \u0440\u0443\u0431\u043B\u044F\u0445", String(DEFAULT_SANDBOX_PAYIN_RUB)).action(
     async (opts, cmd) => runCommand(cmd, async (client, json, mode) => {
-      if (mode !== "sandbox") {
-        throw new AppError({
-          code: "APP_TINVEST_SANDBOX_ONLY",
-          userMessage: "\u041A\u043E\u043C\u0430\u043D\u0434\u0430 \xABsandbox init\xBB \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0430 \u0442\u043E\u043B\u044C\u043A\u043E \u0432 \u0440\u0435\u0436\u0438\u043C\u0435 \u043F\u0435\u0441\u043E\u0447\u043D\u0438\u0446\u044B. \u0417\u0430\u0444\u0438\u043A\u0441\u0438\u0440\u0443\u0439\u0442\u0435 \u0440\u0435\u0436\u0438\u043C: session start --mode sandbox."
-        });
-      }
+      assertSandboxMode(mode, "sandbox init");
       const amount = parsePositiveInt(opts.amount, "--amount", MAX_SANDBOX_PAYIN_RUB);
       const { accountId } = await client.openSandboxAccount();
       const { balance } = await client.sandboxPayIn(accountId, amount);
       return json ? { accountId, balance } : `\u0421\u0447\u0451\u0442 \u043F\u0435\u0441\u043E\u0447\u043D\u0438\u0446\u044B \u043E\u0442\u043A\u0440\u044B\u0442: ${accountId}
 \u0411\u0430\u043B\u0430\u043D\u0441 \u043F\u043E\u0441\u043B\u0435 \u043F\u043E\u043F\u043E\u043B\u043D\u0435\u043D\u0438\u044F: ${formatMoney(balance)}`;
+    })
+  );
+  sandbox.command("accounts").description("\u0441\u043F\u0438\u0441\u043E\u043A \u0441\u0447\u0435\u0442\u043E\u0432 \u0432 \u043F\u0435\u0441\u043E\u0447\u043D\u0438\u0446\u0435").action(
+    async (_opts, cmd) => runCommand(cmd, async (client, json, mode) => {
+      assertSandboxMode(mode, "sandbox accounts");
+      const views = buildAccountViews(await client.getSandboxAccounts());
+      if (json) {
+        return views;
+      }
+      return views.length > 0 ? renderAccounts(views) : "\u0412 \u043F\u0435\u0441\u043E\u0447\u043D\u0438\u0446\u0435 \u043D\u0435\u0442 \u0441\u0447\u0435\u0442\u043E\u0432. \u041E\u0442\u043A\u0440\u043E\u0439\u0442\u0435 \u0441\u0447\u0451\u0442: sandbox init.";
+    })
+  );
+  sandbox.command("close").description("\u0437\u0430\u043A\u0440\u044B\u0442\u044C \u0441\u0447\u0451\u0442 \u0432 \u043F\u0435\u0441\u043E\u0447\u043D\u0438\u0446\u0435 (\u0432\u0438\u0440\u0442\u0443\u0430\u043B\u044C\u043D\u044B\u0439; \u0443\u0434\u0430\u043B\u044F\u0435\u0442 \u0441\u0447\u0451\u0442 \u0438 \u0435\u0433\u043E \u043F\u043E\u0437\u0438\u0446\u0438\u0438)").argument("<accountId>", "\u0438\u0434\u0435\u043D\u0442\u0438\u0444\u0438\u043A\u0430\u0442\u043E\u0440 \u0441\u0447\u0451\u0442\u0430 \u043F\u0435\u0441\u043E\u0447\u043D\u0438\u0446\u044B (\u0441\u043C. sandbox accounts)").action(
+    async (accountId, _opts, cmd) => runCommand(cmd, async (client, json, mode) => {
+      assertSandboxMode(mode, "sandbox close");
+      await client.closeSandboxAccount(accountId);
+      return json ? { closed: accountId } : `\u0421\u0447\u0451\u0442 \u043F\u0435\u0441\u043E\u0447\u043D\u0438\u0446\u044B ${accountId} \u0437\u0430\u043A\u0440\u044B\u0442.`;
     })
   );
 }
@@ -7630,7 +7917,7 @@ function registerSessionCommands(program3) {
 var import_node_crypto = require("node:crypto");
 
 // src/util/audit.ts
-var import_node_fs4 = __toESM(require("node:fs"), 1);
+var import_node_fs5 = __toESM(require("node:fs"), 1);
 var import_node_path7 = __toESM(require("node:path"), 1);
 function field(label, value) {
   return value === void 0 || value === null ? null : `${label}=${value}`;
@@ -7654,8 +7941,8 @@ function formatAuditLine(e) {
 }
 function appendTradeAudit(entry, filePath = TRADES_LOG_PATH) {
   try {
-    import_node_fs4.default.mkdirSync(import_node_path7.default.dirname(filePath), { recursive: true });
-    import_node_fs4.default.appendFileSync(filePath, `${formatAuditLine(entry)}
+    import_node_fs5.default.mkdirSync(import_node_path7.default.dirname(filePath), { recursive: true });
+    import_node_fs5.default.appendFileSync(filePath, `${formatAuditLine(entry)}
 `, { mode: 384 });
   } catch (err) {
     console.error(
@@ -7734,6 +8021,61 @@ function assertMarketOrderLiquidity(bestBid, bestAsk, maxSpreadPercent) {
   }
 }
 
+// src/commands/trading/price-type.ts
+function priceTypeFor(instrumentType) {
+  return POINT_PRICED_INSTRUMENT_TYPES.includes(instrumentType) ? "PRICE_TYPE_POINT" : "PRICE_TYPE_CURRENCY";
+}
+
+// src/commands/trading/pricing-context.ts
+var CURRENCY_CONTEXT = { priceUnit: "currency", nominalRub: null };
+async function resolvePricingContext(api, instrumentType, uid) {
+  const priceUnit = priceUnitFor(instrumentType);
+  if (instrumentType !== "bond") {
+    return { priceUnit, nominalRub: null };
+  }
+  try {
+    const { instrument } = await api.getBondBy(uid);
+    return { priceUnit, nominalRub: moneyToNumberOrNull(instrument.nominal) };
+  } catch (err) {
+    console.error(
+      `\u041F\u0440\u0435\u0434\u0443\u043F\u0440\u0435\u0436\u0434\u0435\u043D\u0438\u0435: \u043D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u043B\u0443\u0447\u0438\u0442\u044C \u043D\u043E\u043C\u0438\u043D\u0430\u043B \u043E\u0431\u043B\u0438\u0433\u0430\u0446\u0438\u0438 ${uid} \u0434\u043B\u044F \u0440\u0443\u0431\u043B\u0451\u0432\u043E\u0433\u043E \u044D\u043A\u0432\u0438\u0432\u0430\u043B\u0435\u043D\u0442\u0430: ${err instanceof Error ? err.message : String(err)}`
+    );
+    return { priceUnit, nominalRub: null };
+  }
+}
+async function pricingForFigi(api, figi) {
+  const info = await resolveLabelByFigi(api, figi);
+  if (!info) {
+    return CURRENCY_CONTEXT;
+  }
+  return resolvePricingContext(api, info.instrumentType, info.uid);
+}
+async function priceUnitsByFigi(api, figis) {
+  const unique = [...new Set(figis.filter((f) => Boolean(f)))];
+  const byFigi = /* @__PURE__ */ new Map();
+  if (unique.length === 0) {
+    return byFigi;
+  }
+  await mapWithConcurrency(
+    unique,
+    { concurrency: BATCH_CONCURRENCY, minIntervalMs: BATCH_MIN_INTERVAL_MS },
+    async (figi) => {
+      try {
+        const info = await resolveLabelByFigi(api, figi);
+        if (info) {
+          byFigi.set(figi, priceUnitFor(info.instrumentType));
+        }
+      } catch (err) {
+        console.error(
+          `\u041F\u0440\u0435\u0434\u0443\u043F\u0440\u0435\u0436\u0434\u0435\u043D\u0438\u0435: \u043D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0438\u0442\u044C \u0435\u0434\u0438\u043D\u0438\u0446\u0443 \u0446\u0435\u043D\u044B \u043F\u043E FIGI ${figi}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+      return null;
+    }
+  );
+  return byFigi;
+}
+
 // src/commands/trading/orders.ts
 function announceIdempotencyKey(clientOrderId) {
   console.error(
@@ -7777,7 +8119,9 @@ function toPlacedView(resp, base) {
     executedPrice: moneyToNumberOrNull(resp.executedOrderPrice),
     commission: moneyToNumberOrNull(resp.executedCommission),
     currency: resp.totalOrderAmount?.currency ?? null,
-    message: resp.message || null
+    message: resp.message || null,
+    priceUnit: base.priceUnit,
+    nominalRub: base.nominalRub
   };
 }
 async function placeOrder(api, params) {
@@ -7807,11 +8151,19 @@ async function placeOrder(api, params) {
     direction: orderDirectionToApi(params.direction),
     orderType: orderType === "limit" ? "ORDER_TYPE_LIMIT" : "ORDER_TYPE_MARKET",
     orderId: clientOrderId,
-    ...params.limitPrice !== null ? { price: numberToQuotation(params.limitPrice) } : {}
+    ...params.limitPrice !== null ? { price: numberToQuotation(params.limitPrice), priceType: priceTypeFor(instrument.instrumentType) } : {}
   };
   announceIdempotencyKey(clientOrderId);
   const resp = await api.call(paths.postOrder, request);
-  const view = toPlacedView(resp, { ticker: instrument.ticker, direction: params.direction, orderType, clientOrderId });
+  const pricing = await resolvePricingContext(api, instrument.instrumentType, instrument.uid);
+  const view = toPlacedView(resp, {
+    ticker: instrument.ticker,
+    direction: params.direction,
+    orderType,
+    clientOrderId,
+    priceUnit: pricing.priceUnit,
+    nominalRub: pricing.nominalRub
+  });
   appendTradeAudit({
     at: (/* @__PURE__ */ new Date()).toISOString(),
     mode: params.mode,
@@ -7863,6 +8215,7 @@ async function previewOrder(api, params) {
     commission = moneyToNumberOrNull(price.executedCommission);
     currency = price.totalOrderAmount?.currency ?? currency;
   }
+  const pricing = await resolvePricingContext(api, instrument.instrumentType, instrument.uid);
   return {
     ticker: instrument.ticker,
     name: instrument.name,
@@ -7876,10 +8229,12 @@ async function previewOrder(api, params) {
     currency,
     maxBuyLots: maxLots.buyLimits?.buyMaxLots ? Number(maxLots.buyLimits.buyMaxLots) : null,
     maxSellLots: maxLots.sellLimits?.sellMaxLots ? Number(maxLots.sellLimits.sellMaxLots) : null,
-    availableMoney: quotationToNumberOrNull(maxLots.buyLimits?.buyMoneyAmount)
+    availableMoney: quotationToNumberOrNull(maxLots.buyLimits?.buyMoneyAmount),
+    priceUnit: pricing.priceUnit,
+    nominalRub: pricing.nominalRub
   };
 }
-function toOrderStateView(order) {
+function toOrderStateView(order, pricing = { priceUnit: "currency", nominalRub: null }) {
   return {
     orderId: order.orderId ?? null,
     ticker: order.ticker ?? order.figi ?? null,
@@ -7890,14 +8245,20 @@ function toOrderStateView(order) {
     initialPrice: moneyToNumberOrNull(order.initialSecurityPrice),
     totalAmount: moneyToNumberOrNull(order.totalOrderAmount),
     currency: order.totalOrderAmount?.currency ?? null,
-    orderDate: order.orderDate ?? null
+    orderDate: order.orderDate ?? null,
+    priceUnit: pricing.priceUnit,
+    nominalRub: pricing.nominalRub
   };
 }
 async function listOrders(api, params) {
   const paths = tradingPathsForMode(params.mode);
   const accountId = await resolveAccountId(api, params.explicitAccountId);
   const resp = await api.call(paths.getOrders, { accountId });
-  return (resp.orders ?? []).map(toOrderStateView);
+  const orders = resp.orders ?? [];
+  const units = await priceUnitsByFigi(api, orders.map((o) => o.figi ?? ""));
+  return orders.map(
+    (o) => toOrderStateView(o, { priceUnit: o.figi && units.get(o.figi) || "currency", nominalRub: null })
+  );
 }
 async function orderStatus(api, params) {
   const paths = tradingPathsForMode(params.mode);
@@ -7906,7 +8267,8 @@ async function orderStatus(api, params) {
     accountId,
     orderId: params.orderId
   });
-  return toOrderStateView(resp);
+  const pricing = await pricingForFigi(api, resp.figi ?? "");
+  return toOrderStateView(resp, pricing);
 }
 async function cancelOrder(api, params) {
   assertMutationAllowed(params.mode, params.confirm, params.tradingGate);
@@ -7931,22 +8293,37 @@ async function replaceOrder(api, params) {
   assertMutationAllowed(params.mode, params.confirm, params.tradingGate);
   const paths = tradingPathsForMode(params.mode);
   const accountId = await resolveAccountId(api, params.explicitAccountId);
+  const state = await api.call(paths.getOrderState, {
+    accountId,
+    orderId: params.orderId
+  });
+  const instrument = await resolveLabelByFigi(api, state.figi ?? "");
+  if (!instrument) {
+    throw new AppError({
+      code: "APP_TINVEST_ORDER_INSTRUMENT_UNKNOWN",
+      userMessage: `\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0438\u0442\u044C \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442 \u0437\u0430\u044F\u0432\u043A\u0438 ${params.orderId} \u2014 \u0437\u0430\u043C\u0435\u043D\u0430 \u043E\u0442\u043C\u0435\u043D\u0435\u043D\u0430, \u0447\u0442\u043E\u0431\u044B \u043D\u0435 \u0432\u044B\u0441\u0442\u0430\u0432\u0438\u0442\u044C \u0446\u0435\u043D\u0443 \u043D\u0435\u0432\u0435\u0440\u043D\u043E\u0433\u043E \u0442\u0438\u043F\u0430. \u041F\u0440\u043E\u0432\u0435\u0440\u044C\u0442\u0435 \u043D\u043E\u043C\u0435\u0440 \u0437\u0430\u044F\u0432\u043A\u0438: order status.`
+    });
+  }
   const idempotencyKey = params.newOrderId ?? (0, import_node_crypto.randomUUID)();
   announceIdempotencyKey(idempotencyKey);
-  const resp = await api.call(paths.replaceOrder, {
+  const replaceRequest = {
     accountId,
     orderId: params.orderId,
     idempotencyKey,
     quantity: String(params.lots),
-    price: numberToQuotation(params.price)
-  });
-  const label = await resolveLabelByFigi(api, resp.figi ?? "");
+    price: numberToQuotation(params.price),
+    priceType: priceTypeFor(instrument.instrumentType)
+  };
+  const resp = await api.call(paths.replaceOrder, replaceRequest);
+  const pricing = await resolvePricingContext(api, instrument.instrumentType, instrument.uid);
   const view = toPlacedView(resp, {
-    ticker: label?.ticker ?? resp.figi ?? params.orderId,
+    ticker: instrument.ticker,
     // Направление берём из ответа; при отсутствии поля — null, не «покупка».
     direction: directionFromApi(resp.direction),
     orderType: "limit",
-    clientOrderId: idempotencyKey
+    clientOrderId: idempotencyKey,
+    priceUnit: pricing.priceUnit,
+    nominalRub: pricing.nominalRub
   });
   appendTradeAudit({
     at: (/* @__PURE__ */ new Date()).toISOString(),
@@ -7962,6 +8339,8 @@ async function replaceOrder(api, params) {
   });
   return view;
 }
+
+// src/commands/trading/orders-render.ts
 function placedHeaderDirection(direction) {
   return direction ? `${directionPhrase(direction)} ` : "";
 }
@@ -7969,7 +8348,9 @@ function renderPlacedOrder(view) {
   const lines = [
     `\u0417\u0430\u044F\u0432\u043A\u0430 ${placedHeaderDirection(view.direction)}${view.ticker} (${view.orderType === "limit" ? "\u043B\u0438\u043C\u0438\u0442\u043D\u0430\u044F" : "\u0440\u044B\u043D\u043E\u0447\u043D\u0430\u044F"}): ${view.statusText ?? DASH}`,
     `\u041D\u043E\u043C\u0435\u0440: ${view.orderId ?? DASH} | \u043A\u043B\u044E\u0447 \u0438\u0434\u0435\u043C\u043F\u043E\u0442\u0435\u043D\u0442\u043D\u043E\u0441\u0442\u0438: ${view.clientOrderId} | \u043B\u043E\u0442\u043E\u0432: ${view.lotsExecuted ?? 0}/${view.lotsRequested ?? DASH}`,
-    `\u0421\u0443\u043C\u043C\u0430: ${view.totalAmount !== null ? `${formatAmount(view.totalAmount)} ${view.currency?.toUpperCase() ?? ""}` : DASH}` + (view.commission !== null ? ` | \u043A\u043E\u043C\u0438\u0441\u0441\u0438\u044F: ${formatAmount(view.commission)}` : "")
+    // Сумма помечается единицей из ответа API: у ещё не исполненной заявки по
+    // облигации приходит в пунктах (currency "pt."), у исполненной — в рублях.
+    `\u0421\u0443\u043C\u043C\u0430: ${view.totalAmount !== null ? formatMoneyAmount(view.totalAmount, view.currency) : DASH}` + (view.commission !== null ? ` | \u043A\u043E\u043C\u0438\u0441\u0441\u0438\u044F: ${formatMoneyAmount(view.commission, view.currency)}` : "")
   ];
   if (view.message) {
     lines.push(`\u0421\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435 \u0431\u0440\u043E\u043A\u0435\u0440\u0430: ${view.message}`);
@@ -7977,12 +8358,23 @@ function renderPlacedOrder(view) {
   return lines.join("\n");
 }
 function renderOrderPreview(view) {
-  return [
+  const priceText = view.priceUsed !== null ? formatInstrumentPrice(view.priceUsed, {
+    unit: view.priceUnit,
+    nominalRub: view.nominalRub,
+    currency: view.currency
+  }) : DASH;
+  const lines = [
     `\u041F\u0440\u0435\u0434\u043F\u0440\u043E\u0441\u043C\u043E\u0442\u0440: ${directionLabel(view.direction)} ${view.ticker} (${view.name}), \u043B\u043E\u0442\u043E\u0432: ${view.lots}` + (view.lotSize !== null ? ` (\u0432 \u043B\u043E\u0442\u0435 ${view.lotSize} \u0448\u0442.)` : ""),
-    `\u0426\u0435\u043D\u0430 \u0434\u043B\u044F \u043E\u0446\u0435\u043D\u043A\u0438: ${view.priceUsed !== null ? formatAmount(view.priceUsed) : DASH} (${view.priceSource === "limit" ? "\u043B\u0438\u043C\u0438\u0442\u043D\u0430\u044F" : "\u043F\u043E\u0441\u043B\u0435\u0434\u043D\u044F\u044F \u0440\u044B\u043D\u043E\u0447\u043D\u0430\u044F"})`,
-    `\u041E\u0446\u0435\u043D\u043A\u0430 \u0441\u0443\u043C\u043C\u044B: ${view.estimatedAmount !== null ? `${formatAmount(view.estimatedAmount)} ${view.currency?.toUpperCase() ?? ""}` : DASH}` + (view.commission !== null ? ` | \u043A\u043E\u043C\u0438\u0441\u0441\u0438\u044F: ${formatAmount(view.commission)}` : ""),
-    `\u0414\u043E\u0441\u0442\u0443\u043F\u043D\u043E: \u043F\u043E\u043A\u0443\u043F\u043A\u0430 \u0434\u043E ${view.maxBuyLots ?? DASH} \u043B\u043E\u0442\u043E\u0432 | \u043F\u0440\u043E\u0434\u0430\u0436\u0430 \u0434\u043E ${view.maxSellLots ?? DASH} \u043B\u043E\u0442\u043E\u0432` + (view.availableMoney !== null ? ` | \u0441\u0432\u043E\u0431\u043E\u0434\u043D\u043E ${formatAmount(view.availableMoney)}` : "")
-  ].join("\n");
+    `\u0426\u0435\u043D\u0430 \u0434\u043B\u044F \u043E\u0446\u0435\u043D\u043A\u0438: ${priceText} (${view.priceSource === "limit" ? "\u043B\u0438\u043C\u0438\u0442\u043D\u0430\u044F" : "\u043F\u043E\u0441\u043B\u0435\u0434\u043D\u044F\u044F \u0440\u044B\u043D\u043E\u0447\u043D\u0430\u044F"})`,
+    `\u041E\u0446\u0435\u043D\u043A\u0430 \u0441\u0443\u043C\u043C\u044B: ${view.estimatedAmount !== null ? formatMoneyAmount(view.estimatedAmount, view.currency) : DASH}` + (view.commission !== null ? ` | \u043A\u043E\u043C\u0438\u0441\u0441\u0438\u044F: ${formatMoneyAmount(view.commission, view.currency)}` : ""),
+    `\u0414\u043E\u0441\u0442\u0443\u043F\u043D\u043E: \u043F\u043E\u043A\u0443\u043F\u043A\u0430 \u0434\u043E ${view.maxBuyLots ?? DASH} \u043B\u043E\u0442\u043E\u0432 | \u043F\u0440\u043E\u0434\u0430\u0436\u0430 \u0434\u043E ${view.maxSellLots ?? DASH} \u043B\u043E\u0442\u043E\u0432` + (view.availableMoney !== null ? ` | \u0441\u0432\u043E\u0431\u043E\u0434\u043D\u043E ${formatMoneyAmount(view.availableMoney, view.currency)}` : "")
+  ];
+  if (view.priceUnit === "point") {
+    lines.push(
+      "\u041F\u0440\u0438\u043C\u0435\u0447\u0430\u043D\u0438\u0435: \u043E\u0446\u0435\u043D\u043A\u0430 \u0441\u0443\u043C\u043C\u044B \u043E\u0442 API \u043F\u043E \u043E\u0431\u043B\u0438\u0433\u0430\u0446\u0438\u044F\u043C/\u0444\u044C\u044E\u0447\u0435\u0440\u0441\u0430\u043C \u0437\u0430\u043D\u0438\u0436\u0435\u043D\u0430 (\u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u0431\u0435\u0437 \u043D\u043E\u043C\u0438\u043D\u0430\u043B\u0430) \u2014 \u043E\u0440\u0438\u0435\u043D\u0442\u0438\u0440\u0443\u0439\u0442\u0435\u0441\u044C \u043D\u0430 \u0446\u0435\u043D\u0443 \u0432\u044B\u0448\u0435 \u0438 \u043F\u0440\u043E\u0432\u0435\u0440\u044F\u0439\u0442\u0435 \u0444\u0430\u043A\u0442\u0438\u0447\u0435\u0441\u043A\u043E\u0435 \u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435 \u0447\u0435\u0440\u0435\u0437 portfolio/operations."
+    );
+  }
+  return lines.join("\n");
 }
 function renderOrders(views) {
   if (views.length === 0) {
@@ -7996,16 +8388,23 @@ function renderOrders(views) {
       directionLabel(v.direction),
       v.statusText ?? DASH,
       `${v.lotsExecuted ?? 0}/${v.lotsRequested ?? DASH}`,
-      v.initialPrice !== null ? formatAmount(v.initialPrice) : DASH,
-      v.totalAmount !== null ? formatAmount(v.totalAmount) : DASH
+      // В таблице цена помечается единицей, но без ₽-эквивалента (nominalRub не
+      // тянем на список) — компактно: «100.50 пт» для облигации, «300.50 ₽» для акции.
+      v.initialPrice !== null ? formatInstrumentPrice(v.initialPrice, { unit: v.priceUnit, nominalRub: null, currency: v.currency }) : DASH,
+      v.totalAmount !== null ? formatMoneyAmount(v.totalAmount, v.currency) : DASH
     ])
   );
 }
 function renderOrderState(view) {
+  const priceText = view.initialPrice !== null ? formatInstrumentPrice(view.initialPrice, {
+    unit: view.priceUnit,
+    nominalRub: view.nominalRub,
+    currency: view.currency
+  }) : DASH;
   return [
     `\u0417\u0430\u044F\u0432\u043A\u0430 ${view.orderId ?? DASH}: ${view.statusText ?? DASH}`,
     `${view.ticker ?? DASH} | ${directionLabel(view.direction)} | \u043B\u043E\u0442\u043E\u0432 ${view.lotsExecuted ?? 0}/${view.lotsRequested ?? DASH}`,
-    `\u0426\u0435\u043D\u0430: ${view.initialPrice !== null ? formatAmount(view.initialPrice) : DASH} | \u0441\u0443\u043C\u043C\u0430: ${view.totalAmount !== null ? formatAmount(view.totalAmount) : DASH}`
+    `\u0426\u0435\u043D\u0430: ${priceText} | \u0441\u0443\u043C\u043C\u0430: ${view.totalAmount !== null ? formatMoneyAmount(view.totalAmount, view.currency) : DASH}`
   ].join("\n");
 }
 
@@ -8038,6 +8437,7 @@ async function placeStopOrder(api, params) {
     stopOrderType: STOP_TYPE_BY_KIND[params.kind],
     expirationType: "STOP_ORDER_EXPIRATION_TYPE_GOOD_TILL_CANCEL",
     stopPrice: numberToQuotation(params.stopPrice),
+    priceType: priceTypeFor(instrument.instrumentType),
     ...params.limitPrice !== null ? { price: numberToQuotation(params.limitPrice) } : {},
     orderId: clientOrderId
   };
@@ -8045,6 +8445,7 @@ async function placeStopOrder(api, params) {
     `\u041A\u043B\u044E\u0447 \u0438\u0434\u0435\u043C\u043F\u043E\u0442\u0435\u043D\u0442\u043D\u043E\u0441\u0442\u0438 \u0441\u0442\u043E\u043F-\u0437\u0430\u044F\u0432\u043A\u0438: ${clientOrderId}. \u0414\u043B\u044F \u043F\u043E\u0432\u0442\u043E\u0440\u0430: --order-id ${clientOrderId}`
   );
   const resp = await api.call(paths.postStopOrder, request);
+  const pricing = await resolvePricingContext(api, instrument.instrumentType, instrument.uid);
   const view = {
     stopOrderId: resp.stopOrderId ?? null,
     ticker: instrument.ticker,
@@ -8052,7 +8453,9 @@ async function placeStopOrder(api, params) {
     direction: params.direction,
     lots: params.lots,
     stopPrice: params.stopPrice,
-    limitPrice: params.limitPrice
+    limitPrice: params.limitPrice,
+    priceUnit: pricing.priceUnit,
+    nominalRub: pricing.nominalRub
   };
   appendTradeAudit({
     at: (/* @__PURE__ */ new Date()).toISOString(),
@@ -8068,7 +8471,7 @@ async function placeStopOrder(api, params) {
   });
   return view;
 }
-function toStopOrderView(info) {
+function toStopOrderView(info, pricing = { priceUnit: "currency" }) {
   const limit = moneyToNumberOrNull(info.price);
   return {
     stopOrderId: info.stopOrderId ?? null,
@@ -8078,7 +8481,8 @@ function toStopOrderView(info) {
     stopPrice: moneyToNumberOrNull(info.stopPrice),
     limitPrice: limit !== null && limit !== 0 ? limit : null,
     createDate: info.createDate ?? null,
-    status: info.status ?? null
+    status: info.status ?? null,
+    priceUnit: pricing.priceUnit
   };
 }
 async function listStopOrders(api, params) {
@@ -8087,7 +8491,7 @@ async function listStopOrders(api, params) {
   const resp = await api.call(paths.getStopOrders, { accountId });
   const infos = resp.stopOrders ?? [];
   const uniqueFigis = [...new Set(infos.map((i) => i.figi).filter((f) => Boolean(f)))];
-  const tickerByFigi = /* @__PURE__ */ new Map();
+  const metaByFigi = /* @__PURE__ */ new Map();
   if (uniqueFigis.length > 0) {
     await mapWithConcurrency(
       uniqueFigis,
@@ -8096,11 +8500,11 @@ async function listStopOrders(api, params) {
         try {
           const label = await resolveLabelByFigi(api, figi);
           if (label) {
-            tickerByFigi.set(figi, label.ticker);
+            metaByFigi.set(figi, { ticker: label.ticker, priceUnit: priceUnitFor(label.instrumentType) });
           }
         } catch (err) {
           console.error(
-            `\u041F\u0440\u0435\u0434\u0443\u043F\u0440\u0435\u0436\u0434\u0435\u043D\u0438\u0435: \u043D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u043B\u0443\u0447\u0438\u0442\u044C \u0442\u0438\u043A\u0435\u0440 \u043F\u043E FIGI ${figi}: ${err instanceof Error ? err.message : String(err)}`
+            `\u041F\u0440\u0435\u0434\u0443\u043F\u0440\u0435\u0436\u0434\u0435\u043D\u0438\u0435: \u043D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u043B\u0443\u0447\u0438\u0442\u044C \u0442\u0438\u043A\u0435\u0440/\u0435\u0434\u0438\u043D\u0438\u0446\u0443 \u0446\u0435\u043D\u044B \u043F\u043E FIGI ${figi}: ${err instanceof Error ? err.message : String(err)}`
           );
         }
         return null;
@@ -8108,9 +8512,9 @@ async function listStopOrders(api, params) {
     );
   }
   return infos.map((info) => {
-    const view = toStopOrderView(info);
-    const ticker = info.figi ? tickerByFigi.get(info.figi) : void 0;
-    return ticker ? { ...view, ticker } : view;
+    const meta = info.figi ? metaByFigi.get(info.figi) : void 0;
+    const view = toStopOrderView(info, { priceUnit: meta?.priceUnit ?? "currency" });
+    return meta ? { ...view, ticker: meta.ticker } : view;
   });
 }
 async function cancelStopOrder(api, params) {
@@ -8137,9 +8541,10 @@ function renderPlacedStopOrder(view) {
     "stop-loss": "\u0441\u0442\u043E\u043F-\u043B\u043E\u0441\u0441",
     "stop-limit": "\u0441\u0442\u043E\u043F-\u043B\u0438\u043C\u0438\u0442"
   };
+  const priceOpts = { unit: view.priceUnit, nominalRub: view.nominalRub, currency: null };
   return [
     `\u0421\u0442\u043E\u043F-\u0437\u0430\u044F\u0432\u043A\u0430 (${kindLabels[view.kind]}) \u043F\u043E ${view.ticker} \u0432\u044B\u0441\u0442\u0430\u0432\u043B\u0435\u043D\u0430: ${view.stopOrderId ?? DASH}`,
-    `${directionLabel(view.direction)} ${view.lots} \u043B\u043E\u0442(\u043E\u0432) \u043F\u0440\u0438 \u0446\u0435\u043D\u0435 ${formatAmount(view.stopPrice)}` + (view.limitPrice !== null ? `, \u043B\u0438\u043C\u0438\u0442 ${formatAmount(view.limitPrice)}` : "")
+    `${directionLabel(view.direction)} ${view.lots} \u043B\u043E\u0442(\u043E\u0432) \u043F\u0440\u0438 \u0446\u0435\u043D\u0435 ${formatInstrumentPrice(view.stopPrice, priceOpts)}` + (view.limitPrice !== null ? `, \u043B\u0438\u043C\u0438\u0442 ${formatInstrumentPrice(view.limitPrice, priceOpts)}` : "")
   ].join("\n");
 }
 function renderStopOrders(views) {
@@ -8153,8 +8558,9 @@ function renderStopOrders(views) {
       v.ticker ?? DASH,
       directionLabel(v.direction),
       v.lots !== null ? String(v.lots) : DASH,
-      v.stopPrice !== null ? formatAmount(v.stopPrice) : DASH,
-      v.limitPrice !== null ? formatAmount(v.limitPrice) : DASH,
+      // В таблице — метка единицы без ₽-эквивалента (nominalRub не тянем на список).
+      v.stopPrice !== null ? formatInstrumentPrice(v.stopPrice, { unit: v.priceUnit, nominalRub: null, currency: null }) : DASH,
+      v.limitPrice !== null ? formatInstrumentPrice(v.limitPrice, { unit: v.priceUnit, nominalRub: null, currency: null }) : DASH,
       // Дата создания — в МСК (createDate приходит в UTC).
       v.createDate ? formatMoscowDate(v.createDate) : DASH
     ])
@@ -8181,7 +8587,10 @@ function parseStopKind(raw) {
   });
 }
 function registerPlaceCommand(order, direction) {
-  order.command(direction).description(`${direction === "buy" ? "\u043A\u0443\u043F\u0438\u0442\u044C" : "\u043F\u0440\u043E\u0434\u0430\u0442\u044C"}: \u0440\u044B\u043D\u043E\u0447\u043D\u0430\u044F (\u0431\u0435\u0437 --price) \u0438\u043B\u0438 \u043B\u0438\u043C\u0438\u0442\u043D\u0430\u044F \u0437\u0430\u044F\u0432\u043A\u0430`).argument("<query>", "\u0442\u0438\u043A\u0435\u0440 \u0438\u043B\u0438 ISIN \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430").requiredOption("-q, --lots <n>", "\u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E \u041B\u041E\u0422\u041E\u0412 (\u0441\u043C. \u0440\u0430\u0437\u043C\u0435\u0440 \u043B\u043E\u0442\u0430 \u0432 order preview)").option("--price <price>", "\u043B\u0438\u043C\u0438\u0442\u043D\u0430\u044F \u0446\u0435\u043D\u0430 (\u0431\u0435\u0437 \u043D\u0435\u0451 \u2014 \u0440\u044B\u043D\u043E\u0447\u043D\u0430\u044F \u0437\u0430\u044F\u0432\u043A\u0430)").option("-a, --account <id>", "\u0438\u0434\u0435\u043D\u0442\u0438\u0444\u0438\u043A\u0430\u0442\u043E\u0440 \u0441\u0447\u0451\u0442\u0430").option("--confirm", "\u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043D\u0438\u0435 \u0441\u0434\u0435\u043B\u043A\u0438 \u0440\u0435\u0430\u043B\u044C\u043D\u044B\u043C\u0438 \u0434\u0435\u043D\u044C\u0433\u0430\u043C\u0438 (\u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u0435\u043D \u0432 \u0440\u0435\u0436\u0438\u043C\u0435 full)").option("--order-id <id>", "\u0441\u0432\u043E\u0439 \u043A\u043B\u044E\u0447 \u0438\u0434\u0435\u043C\u043F\u043E\u0442\u0435\u043D\u0442\u043D\u043E\u0441\u0442\u0438 (\u043F\u043E\u0432\u0442\u043E\u0440 \u0442\u043E\u0439 \u0436\u0435 \u0437\u0430\u044F\u0432\u043A\u0438 \u043D\u0435 \u043F\u0440\u043E\u0434\u0443\u0431\u043B\u0438\u0440\u0443\u0435\u0442 \u0435\u0451)").action(
+  order.command(direction).description(`${direction === "buy" ? "\u043A\u0443\u043F\u0438\u0442\u044C" : "\u043F\u0440\u043E\u0434\u0430\u0442\u044C"}: \u0440\u044B\u043D\u043E\u0447\u043D\u0430\u044F (\u0431\u0435\u0437 --price) \u0438\u043B\u0438 \u043B\u0438\u043C\u0438\u0442\u043D\u0430\u044F \u0437\u0430\u044F\u0432\u043A\u0430`).argument("<query>", "\u0442\u0438\u043A\u0435\u0440 \u0438\u043B\u0438 ISIN \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430").requiredOption("-q, --lots <n>", "\u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E \u041B\u041E\u0422\u041E\u0412 (\u0441\u043C. \u0440\u0430\u0437\u043C\u0435\u0440 \u043B\u043E\u0442\u0430 \u0432 order preview)").option(
+    "--price <price>",
+    "\u043B\u0438\u043C\u0438\u0442\u043D\u0430\u044F \u0446\u0435\u043D\u0430 (\u0431\u0435\u0437 \u043D\u0435\u0451 \u2014 \u0440\u044B\u043D\u043E\u0447\u043D\u0430\u044F \u0437\u0430\u044F\u0432\u043A\u0430); \u0434\u043B\u044F \u043E\u0431\u043B\u0438\u0433\u0430\u0446\u0438\u0439 \u0438 \u0444\u044C\u044E\u0447\u0435\u0440\u0441\u043E\u0432 \u2014 \u0432 \u043F\u0443\u043D\u043A\u0442\u0430\u0445 (% \u043D\u043E\u043C\u0438\u043D\u0430\u043B\u0430)"
+  ).option("-a, --account <id>", "\u0438\u0434\u0435\u043D\u0442\u0438\u0444\u0438\u043A\u0430\u0442\u043E\u0440 \u0441\u0447\u0451\u0442\u0430").option("--confirm", "\u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043D\u0438\u0435 \u0441\u0434\u0435\u043B\u043A\u0438 \u0440\u0435\u0430\u043B\u044C\u043D\u044B\u043C\u0438 \u0434\u0435\u043D\u044C\u0433\u0430\u043C\u0438 (\u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u0435\u043D \u0432 \u0440\u0435\u0436\u0438\u043C\u0435 full)").option("--order-id <id>", "\u0441\u0432\u043E\u0439 \u043A\u043B\u044E\u0447 \u0438\u0434\u0435\u043C\u043F\u043E\u0442\u0435\u043D\u0442\u043D\u043E\u0441\u0442\u0438 (\u043F\u043E\u0432\u0442\u043E\u0440 \u0442\u043E\u0439 \u0436\u0435 \u0437\u0430\u044F\u0432\u043A\u0438 \u043D\u0435 \u043F\u0440\u043E\u0434\u0443\u0431\u043B\u0438\u0440\u0443\u0435\u0442 \u0435\u0451)").action(
     async (query, opts, cmd) => runCommand(cmd, async (client, json, mode, tradingGate) => {
       const view = await placeOrder(client, {
         mode,
@@ -8200,7 +8609,10 @@ function registerPlaceCommand(order, direction) {
 }
 function registerTradingCommands(program3) {
   const order = program3.command("order").description("\u0442\u043E\u0440\u0433\u043E\u0432\u044B\u0435 \u0437\u0430\u044F\u0432\u043A\u0438 (\u043F\u0435\u0441\u043E\u0447\u043D\u0438\u0446\u0430/\u0431\u043E\u0435\u0432\u043E\u0439; \u0432 full \u043C\u0443\u0442\u0430\u0446\u0438\u0438 \u0442\u0440\u0435\u0431\u0443\u044E\u0442 --confirm)");
-  order.command("preview").description("\u043F\u0440\u0435\u0434\u043F\u0440\u043E\u0441\u043C\u043E\u0442\u0440: \u043E\u0446\u0435\u043D\u043A\u0430 \u0441\u0443\u043C\u043C\u044B, \u043A\u043E\u043C\u0438\u0441\u0441\u0438\u044F, \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u044B\u0435 \u043B\u043E\u0442\u044B (\u0431\u0435\u0437 \u0432\u044B\u0441\u0442\u0430\u0432\u043B\u0435\u043D\u0438\u044F)").argument("<query>", "\u0442\u0438\u043A\u0435\u0440 \u0438\u043B\u0438 ISIN \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430").requiredOption("-q, --lots <n>", "\u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E \u043B\u043E\u0442\u043E\u0432").option("--price <price>", "\u043B\u0438\u043C\u0438\u0442\u043D\u0430\u044F \u0446\u0435\u043D\u0430 (\u0431\u0435\u0437 \u043D\u0435\u0451 \u2014 \u043E\u0446\u0435\u043D\u043A\u0430 \u043F\u043E \u043F\u043E\u0441\u043B\u0435\u0434\u043D\u0435\u0439 \u0440\u044B\u043D\u043E\u0447\u043D\u043E\u0439)").option("--direction <dir>", "\u043D\u0430\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0438\u0435: buy | sell", "buy").option("-a, --account <id>", "\u0438\u0434\u0435\u043D\u0442\u0438\u0444\u0438\u043A\u0430\u0442\u043E\u0440 \u0441\u0447\u0451\u0442\u0430").action(
+  order.command("preview").description("\u043F\u0440\u0435\u0434\u043F\u0440\u043E\u0441\u043C\u043E\u0442\u0440: \u043E\u0446\u0435\u043D\u043A\u0430 \u0441\u0443\u043C\u043C\u044B, \u043A\u043E\u043C\u0438\u0441\u0441\u0438\u044F, \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u044B\u0435 \u043B\u043E\u0442\u044B (\u0431\u0435\u0437 \u0432\u044B\u0441\u0442\u0430\u0432\u043B\u0435\u043D\u0438\u044F)").argument("<query>", "\u0442\u0438\u043A\u0435\u0440 \u0438\u043B\u0438 ISIN \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430").requiredOption("-q, --lots <n>", "\u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E \u043B\u043E\u0442\u043E\u0432").option(
+    "--price <price>",
+    "\u043B\u0438\u043C\u0438\u0442\u043D\u0430\u044F \u0446\u0435\u043D\u0430 (\u0431\u0435\u0437 \u043D\u0435\u0451 \u2014 \u043E\u0446\u0435\u043D\u043A\u0430 \u043F\u043E \u043F\u043E\u0441\u043B\u0435\u0434\u043D\u0435\u0439 \u0440\u044B\u043D\u043E\u0447\u043D\u043E\u0439); \u043E\u0431\u043B\u0438\u0433\u0430\u0446\u0438\u0438/\u0444\u044C\u044E\u0447\u0435\u0440\u0441\u044B \u2014 \u0432 \u043F\u0443\u043D\u043A\u0442\u0430\u0445 (% \u043D\u043E\u043C\u0438\u043D\u0430\u043B\u0430)"
+  ).option("--direction <dir>", "\u043D\u0430\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0438\u0435: buy | sell", "buy").option("-a, --account <id>", "\u0438\u0434\u0435\u043D\u0442\u0438\u0444\u0438\u043A\u0430\u0442\u043E\u0440 \u0441\u0447\u0451\u0442\u0430").action(
     async (query, opts, cmd) => runCommand(cmd, async (client, json, mode) => {
       const view = await previewOrder(client, {
         mode,
@@ -8239,7 +8651,7 @@ function registerTradingCommands(program3) {
       return json ? result : `\u0417\u0430\u044F\u0432\u043A\u0430 ${orderId} \u043E\u0442\u043C\u0435\u043D\u0435\u043D\u0430${result.cancelledAt ? ` (${result.cancelledAt})` : ""}.`;
     })
   );
-  order.command("replace").description("\u0437\u0430\u043C\u0435\u043D\u0438\u0442\u044C \u043B\u0438\u043C\u0438\u0442\u043D\u0443\u044E \u0437\u0430\u044F\u0432\u043A\u0443: \u043D\u043E\u0432\u044B\u0435 \u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E \u0438 \u0446\u0435\u043D\u0430").argument("<orderId>", "\u043D\u043E\u043C\u0435\u0440 \u0437\u0430\u043C\u0435\u043D\u044F\u0435\u043C\u043E\u0439 \u0437\u0430\u044F\u0432\u043A\u0438").requiredOption("-q, --lots <n>", "\u043D\u043E\u0432\u043E\u0435 \u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E \u043B\u043E\u0442\u043E\u0432").requiredOption("--price <price>", "\u043D\u043E\u0432\u0430\u044F \u043B\u0438\u043C\u0438\u0442\u043D\u0430\u044F \u0446\u0435\u043D\u0430").option("-a, --account <id>", "\u0438\u0434\u0435\u043D\u0442\u0438\u0444\u0438\u043A\u0430\u0442\u043E\u0440 \u0441\u0447\u0451\u0442\u0430").option("--confirm", "\u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043D\u0438\u0435 (\u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u0435\u043D \u0432 \u0440\u0435\u0436\u0438\u043C\u0435 full)").option("--order-id <id>", "\u0441\u0432\u043E\u0439 \u043A\u043B\u044E\u0447 \u0438\u0434\u0435\u043C\u043F\u043E\u0442\u0435\u043D\u0442\u043D\u043E\u0441\u0442\u0438 \u0437\u0430\u043C\u0435\u043D\u044B (\u0434\u043B\u044F \u0431\u0435\u0437\u043E\u043F\u0430\u0441\u043D\u043E\u0433\u043E \u043F\u043E\u0432\u0442\u043E\u0440\u0430)").action(
+  order.command("replace").description("\u0437\u0430\u043C\u0435\u043D\u0438\u0442\u044C \u043B\u0438\u043C\u0438\u0442\u043D\u0443\u044E \u0437\u0430\u044F\u0432\u043A\u0443: \u043D\u043E\u0432\u044B\u0435 \u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E \u0438 \u0446\u0435\u043D\u0430").argument("<orderId>", "\u043D\u043E\u043C\u0435\u0440 \u0437\u0430\u043C\u0435\u043D\u044F\u0435\u043C\u043E\u0439 \u0437\u0430\u044F\u0432\u043A\u0438").requiredOption("-q, --lots <n>", "\u043D\u043E\u0432\u043E\u0435 \u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E \u043B\u043E\u0442\u043E\u0432").requiredOption("--price <price>", "\u043D\u043E\u0432\u0430\u044F \u043B\u0438\u043C\u0438\u0442\u043D\u0430\u044F \u0446\u0435\u043D\u0430 (\u043E\u0431\u043B\u0438\u0433\u0430\u0446\u0438\u0438/\u0444\u044C\u044E\u0447\u0435\u0440\u0441\u044B \u2014 \u0432 \u043F\u0443\u043D\u043A\u0442\u0430\u0445, % \u043D\u043E\u043C\u0438\u043D\u0430\u043B\u0430)").option("-a, --account <id>", "\u0438\u0434\u0435\u043D\u0442\u0438\u0444\u0438\u043A\u0430\u0442\u043E\u0440 \u0441\u0447\u0451\u0442\u0430").option("--confirm", "\u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043D\u0438\u0435 (\u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u0435\u043D \u0432 \u0440\u0435\u0436\u0438\u043C\u0435 full)").option("--order-id <id>", "\u0441\u0432\u043E\u0439 \u043A\u043B\u044E\u0447 \u0438\u0434\u0435\u043C\u043F\u043E\u0442\u0435\u043D\u0442\u043D\u043E\u0441\u0442\u0438 \u0437\u0430\u043C\u0435\u043D\u044B (\u0434\u043B\u044F \u0431\u0435\u0437\u043E\u043F\u0430\u0441\u043D\u043E\u0433\u043E \u043F\u043E\u0432\u0442\u043E\u0440\u0430)").action(
     async (orderId, opts, cmd) => runCommand(cmd, async (client, json, mode, tradingGate) => {
       const view = await replaceOrder(client, {
         mode,
@@ -8255,7 +8667,10 @@ function registerTradingCommands(program3) {
     })
   );
   const stopOrder = program3.command("stop-order").description("\u0441\u0442\u043E\u043F-\u0437\u0430\u044F\u0432\u043A\u0438: \u0442\u0435\u0439\u043A-\u043F\u0440\u043E\u0444\u0438\u0442, \u0441\u0442\u043E\u043F-\u043B\u043E\u0441\u0441, \u0441\u0442\u043E\u043F-\u043B\u0438\u043C\u0438\u0442");
-  stopOrder.command("set").description("\u0432\u044B\u0441\u0442\u0430\u0432\u0438\u0442\u044C \u0441\u0442\u043E\u043F-\u0437\u0430\u044F\u0432\u043A\u0443 (\u0431\u0435\u0441\u0441\u0440\u043E\u0447\u043D\u0443\u044E, \u0434\u043E \u043E\u0442\u043C\u0435\u043D\u044B)").argument("<query>", "\u0442\u0438\u043A\u0435\u0440 \u0438\u043B\u0438 ISIN \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430").requiredOption("-q, --lots <n>", "\u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E \u043B\u043E\u0442\u043E\u0432").requiredOption("--type <kind>", "\u0442\u0438\u043F: take-profit | stop-loss | stop-limit").requiredOption("--stop-price <price>", "\u0446\u0435\u043D\u0430 \u0430\u043A\u0442\u0438\u0432\u0430\u0446\u0438\u0438").option("--price <price>", "\u043B\u0438\u043C\u0438\u0442\u043D\u0430\u044F \u0446\u0435\u043D\u0430 \u043F\u043E\u0441\u043B\u0435 \u0430\u043A\u0442\u0438\u0432\u0430\u0446\u0438\u0438 (\u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u044C\u043D\u0430 \u0434\u043B\u044F stop-limit)").option("--direction <dir>", "\u043D\u0430\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0438\u0435: buy | sell", "sell").option("-a, --account <id>", "\u0438\u0434\u0435\u043D\u0442\u0438\u0444\u0438\u043A\u0430\u0442\u043E\u0440 \u0441\u0447\u0451\u0442\u0430").option("--confirm", "\u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043D\u0438\u0435 (\u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u0435\u043D \u0432 \u0440\u0435\u0436\u0438\u043C\u0435 full)").option("--order-id <id>", "\u0441\u0432\u043E\u0439 \u043A\u043B\u044E\u0447 \u0438\u0434\u0435\u043C\u043F\u043E\u0442\u0435\u043D\u0442\u043D\u043E\u0441\u0442\u0438 (\u0434\u043B\u044F \u0431\u0435\u0437\u043E\u043F\u0430\u0441\u043D\u043E\u0433\u043E \u043F\u043E\u0432\u0442\u043E\u0440\u0430)").action(
+  stopOrder.command("set").description("\u0432\u044B\u0441\u0442\u0430\u0432\u0438\u0442\u044C \u0441\u0442\u043E\u043F-\u0437\u0430\u044F\u0432\u043A\u0443 (\u0431\u0435\u0441\u0441\u0440\u043E\u0447\u043D\u0443\u044E, \u0434\u043E \u043E\u0442\u043C\u0435\u043D\u044B)").argument("<query>", "\u0442\u0438\u043A\u0435\u0440 \u0438\u043B\u0438 ISIN \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u0430").requiredOption("-q, --lots <n>", "\u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E \u043B\u043E\u0442\u043E\u0432").requiredOption("--type <kind>", "\u0442\u0438\u043F: take-profit | stop-loss | stop-limit").requiredOption("--stop-price <price>", "\u0446\u0435\u043D\u0430 \u0430\u043A\u0442\u0438\u0432\u0430\u0446\u0438\u0438 (\u043E\u0431\u043B\u0438\u0433\u0430\u0446\u0438\u0438/\u0444\u044C\u044E\u0447\u0435\u0440\u0441\u044B \u2014 \u0432 \u043F\u0443\u043D\u043A\u0442\u0430\u0445, % \u043D\u043E\u043C\u0438\u043D\u0430\u043B\u0430)").option(
+    "--price <price>",
+    "\u043B\u0438\u043C\u0438\u0442\u043D\u0430\u044F \u0446\u0435\u043D\u0430 \u043F\u043E\u0441\u043B\u0435 \u0430\u043A\u0442\u0438\u0432\u0430\u0446\u0438\u0438 (\u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u044C\u043D\u0430 \u0434\u043B\u044F stop-limit; \u043E\u0431\u043B\u0438\u0433\u0430\u0446\u0438\u0438/\u0444\u044C\u044E\u0447\u0435\u0440\u0441\u044B \u2014 \u0432 \u043F\u0443\u043D\u043A\u0442\u0430\u0445)"
+  ).option("--direction <dir>", "\u043D\u0430\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0438\u0435: buy | sell", "sell").option("-a, --account <id>", "\u0438\u0434\u0435\u043D\u0442\u0438\u0444\u0438\u043A\u0430\u0442\u043E\u0440 \u0441\u0447\u0451\u0442\u0430").option("--confirm", "\u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043D\u0438\u0435 (\u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u0435\u043D \u0432 \u0440\u0435\u0436\u0438\u043C\u0435 full)").option("--order-id <id>", "\u0441\u0432\u043E\u0439 \u043A\u043B\u044E\u0447 \u0438\u0434\u0435\u043C\u043F\u043E\u0442\u0435\u043D\u0442\u043D\u043E\u0441\u0442\u0438 (\u0434\u043B\u044F \u0431\u0435\u0437\u043E\u043F\u0430\u0441\u043D\u043E\u0433\u043E \u043F\u043E\u0432\u0442\u043E\u0440\u0430)").action(
     async (query, opts, cmd) => runCommand(cmd, async (client, json, mode, tradingGate) => {
       const view = await placeStopOrder(client, {
         mode,
@@ -8296,7 +8711,7 @@ function registerTradingCommands(program3) {
 // src/cli.ts
 bootstrapEnv();
 var program2 = new Command();
-program2.name("tinvest").description("CLI \u0434\u043B\u044F \u0422-\u0418\u043D\u0432\u0435\u0441\u0442\u0438\u0446\u0438\u0439 (T-Invest API): \u043F\u043E\u0440\u0442\u0444\u0435\u043B\u044C, \u043A\u043E\u0442\u0438\u0440\u043E\u0432\u043A\u0438, \u043F\u043E\u0438\u0441\u043A, \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438").version("1.0.0").option("--json", "\u0432\u044B\u0432\u043E\u0434 \u0432 \u0444\u043E\u0440\u043C\u0430\u0442\u0435 JSON (\u0434\u043B\u044F \u0438\u043D\u0442\u0435\u0433\u0440\u0430\u0446\u0438\u0439 \u0438 \u0441\u043A\u0438\u043B\u043B\u0430)").option(
+program2.name("tinvest").description("CLI \u0434\u043B\u044F \u0422-\u0418\u043D\u0432\u0435\u0441\u0442\u0438\u0446\u0438\u0439 (T-Invest API): \u043F\u043E\u0440\u0442\u0444\u0435\u043B\u044C, \u043A\u043E\u0442\u0438\u0440\u043E\u0432\u043A\u0438, \u043F\u043E\u0438\u0441\u043A, \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438").version(APP_VERSION).option("--json", "\u0432\u044B\u0432\u043E\u0434 \u0432 \u0444\u043E\u0440\u043C\u0430\u0442\u0435 JSON (\u0434\u043B\u044F \u0438\u043D\u0442\u0435\u0433\u0440\u0430\u0446\u0438\u0439 \u0438 \u0441\u043A\u0438\u043B\u043B\u0430)").option(
   "-m, --mode <mode>",
   "\u0440\u0435\u0436\u0438\u043C: sandbox | readonly | full (\u043F\u043E \u0443\u043C\u043E\u043B\u0447\u0430\u043D\u0438\u044E \u2014 \u043F\u043E \u0435\u0434\u0438\u043D\u0441\u0442\u0432\u0435\u043D\u043D\u043E\u043C\u0443 \u0437\u0430\u043F\u043E\u043B\u043D\u0435\u043D\u043D\u043E\u043C\u0443 \u0442\u043E\u043A\u0435\u043D\u0443)"
 );

@@ -59,13 +59,33 @@ export const T_INVEST_SANDBOX_BASE_URL = 'https://sandbox-invest-public-api.tink
 
 export const REQUEST_TIMEOUT_MS = 30_000;
 
+// Версия CLI/скилла — единый рантайм-источник (cli.ts --version и проверка
+// обновлений). При релизе синхронизировать с package.json и шапкой SKILL.md.
+export const APP_VERSION = '1.1.0';
+
+// Проверка новой версии скилла из репозитория (необязательное удобство,
+// показывается в session status). Источник — package.json ветки main (тот же
+// хост, что и install.sh). Кэш — сутки (не дёргать GitHub на каждый статус),
+// жёсткий короткий таймаут; любая ошибка → тихо пропускаем (чек не критичен).
+export const UPDATE_CHECK_URL =
+  'https://raw.githubusercontent.com/nyxandro/t-invest-skill/main/package.json';
+export const UPDATE_CHECK_TTL_MS = 24 * 60 * 60 * 1000;
+export const UPDATE_CHECK_TIMEOUT_MS = 2_500;
+export const UPDATE_CHECK_CACHE_PATH = path.join(os.homedir(), '.config', 'tinvest', 'update-check.json');
+
 // Единицы времени в миллисекундах — единый источник для всех расчётов дат
 // и доходностей (не дублировать по командам). MS_PER_YEAR по конвенции ACT/365
 // (год = 365 дней) — стандарт котирования доходности на МосБирже; та же
 // конвенция обязана использоваться и в YTM облигаций, и в XIRR портфеля,
 // иначе доходности из разных команд перестают быть сопоставимыми.
-export const MS_PER_DAY = 24 * 60 * 60 * 1000;
+export const MS_PER_HOUR = 60 * 60 * 1000;
+export const MS_PER_DAY = 24 * MS_PER_HOUR;
 export const MS_PER_YEAR = 365 * MS_PER_DAY;
+
+// Окна по умолчанию: расписание торгов (schedule) — неделя вперёд; лента
+// обезличенных сделок (last-trades) — последний час.
+export const SCHEDULE_DEFAULT_DAYS = 7;
+export const LAST_TRADES_DEFAULT_HOURS = 1;
 
 export const DEFAULT_OPERATIONS_DAYS = 30;
 

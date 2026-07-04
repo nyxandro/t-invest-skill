@@ -3,7 +3,7 @@ name: t-invest
 description: Access to the user's Т-Инвестиции / Tinkoff (T-Invest) brokerage account via the T-Invest API — portfolio, positions, cash, quotes and prices, operations, dividends, commissions, yield/returns, bonds, stocks, funds, screeners, and trades on explicit command. Data and analytics, not investment advice. Use whenever the user asks about their own portfolio, account, securities, a quote or price, operations, dividends, returns or trading, or mentions Т-Инвестиции / Тинькофф / T-Invest or a ticker (SBER, GAZP). Data comes from the T-Invest API via the bundled CLI — do not answer from memory.
 ---
 
-<!-- t-invest · версия 1.0.0 · https://github.com/nyxandro/t-invest-skill · CHANGELOG в репозитории -->
+<!-- t-invest · версия 1.1.0 · https://github.com/nyxandro/t-invest-skill · CHANGELOG в репозитории -->
 
 # Доступ к брокерскому счёту Т-Инвестиций
 
@@ -43,8 +43,14 @@ node <каталог-скилла>/scripts/tinvest.cjs session status --json
 
 Ответ содержит: `active` (выбран ли режим), `activeMode` (какой именно),
 `tokens` (какие режимы обеспечены токенами), `tradingAllowed`/`stonksMode`
-(гейт реальных сделок), `warning` (текст предупреждения, если он есть) и
-`tokenEnvPath` (путь к файлу токенов).
+(гейт реальных сделок), `warning` (текст предупреждения, если он есть),
+`tokenEnvPath` (путь к файлу токенов), а также `currentVersion`/`latestVersion`/
+`updateAvailable` (проверка новой версии скилла).
+
+**Если `updateAvailable: true` — один раз сообщи пользователю**, что вышла новая
+версия (`latestVersion` против `currentVersion`) и обновить можно повторным
+запуском `install.sh`. Если `updateAvailable: false` — ничего про версии не пиши,
+работай как обычно.
 
 **Пока режим не выбран, команды с данными не выполняются** — код вернёт
 `APP_TINVEST_SESSION_REQUIRED`. `session status` — источник правды о текущем
@@ -160,7 +166,19 @@ CLI умеет торговать в песочнице (виртуальные 
 5. **`-q` — это ЛОТЫ.** В лоте может быть 1, 10 или 1000 бумаг (видно в
    `order preview`). Если пользователь говорит «купи 100 акций», пересчитай
    в лоты и проговори это явно.
-6. **`readonly` не торгует совсем** — код вернёт
+6. **Цена облигаций и фьючерсов — в ПУНКТАХ (% номинала), не в рублях.** Для
+   облигаций и фьючерсов `--price` и `--stop-price` задаются в пунктах — как в
+   приложении Т-Инвестиций: напр. `103.20` = 103.2 % номинала ≈ 1 032 ₽ при
+   номинале 1 000 ₽. Подставишь рублёвую цену (напр. 1032) — заявку отклонят
+   («price is outside the limits»). Если пользователь называет цену облигации в
+   рублях — переведи в пункты (`пункты = рубли ÷ номинал × 100`; номинал см. в
+   `bond <тикер>`) и проговори. В выводе CLI такие цены помечены как
+   `100.50 пт (≈ 1 005 ₽/шт)` — передавай так же, не называй пункты рублями.
+   ⚠️ `Оценка суммы` в `order preview` для облигаций/фьючерсов ЗАНИЖЕНА
+   (ограничение API — считает без номинала): ориентируйся на цену в ₽/шт из
+   вывода и проверяй фактическое списание через `portfolio`/`operations` после
+   сделки, а не по предпросмотру.
+7. **`readonly` не торгует совсем** — код вернёт
    `APP_TINVEST_TRADING_FORBIDDEN`. Предложи переключиться в песочницу
    (`session start --mode sandbox`) для тренировки либо в full для реальной
    торговли (если она включена флагом в окружении).
@@ -233,6 +251,8 @@ node <каталог-скилла>/scripts/tinvest.cjs <команда> --json
 | `history <тикер> [-d дней] [--vs IMOEX]` | динамика цены: изменение за период, диапазон, волатильность, сравнение с бенчмарком (индексы IMOEX/RTSI поддержаны) |
 | `orderbook <тикер> [--depth n]` | биржевой стакан: лучшие цены, спред, объёмы — оценка ликвидности |
 | `tech <тикер>` | техиндикаторы от API: RSI(14), SMA(20/50), MACD + нейтральные наблюдения |
+| `schedule [площадка] [-d дней]` | расписание торгов: торговые дни и время сессий (основная/вечерняя) в МСК; без площадки — все |
+| `last-trades <тикер> [--hours n]` | лента обезличенных сделок рынка — оценка активности/ликвидности перед заявкой |
 | `bond <тикер/ISIN>` | карточка облигации: цена, НКД, купоны, оферта, **рассчитанная доходность к погашению/оферте**, дюрация, предупреждения |
 | `dividends <тикер>` | дивиденды: объявленные будущие выплаты, история, TTM-доходность к текущей цене |
 | `fundamentals <тикер>` | фундаментальные показатели эмитента: P/E, P/B, EV/EBITDA, ROE, маржа, долг/EBITDA, дивидендные метрики, рост, бета, 52-недельный диапазон |
@@ -270,6 +290,8 @@ node <каталог-скилла>/scripts/tinvest.cjs <команда> --json
 | Команда | Что делает |
 |---|---|
 | `sandbox init [--amount <руб>]` | открыть и пополнить виртуальный счёт (только режим sandbox) |
+| `sandbox accounts` | список счетов песочницы (только режим sandbox) |
+| `sandbox close <id>` | закрыть виртуальный счёт песочницы: удаляет счёт и позиции (только режим sandbox) |
 | `session start [--mode m]` / `session status` / `session end` | зафиксировать активный режим (дефолт readonly), показать статус, снять (см. раздел про выбор режима) |
 
 Кэши: справочники инструментов (сутки) и графики купонов (неделя) лежат в

@@ -3,7 +3,7 @@
  * сборка запросов заявок (рыночная/лимитная/стоп), предпросмотр и статусы.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { GetAccountsResponse } from '../../api/types.js';
+import type { GetAccountsResponse, InstrumentShort } from '../../api/types.js';
 import type { TradingGate } from '../../config/config.js';
 import { assertMarketOrderLiquidity, assertMutationAllowed, tradingPathsForMode } from './paths.js';
 import {
@@ -13,7 +13,8 @@ import {
   replaceOrder,
   type TradingApi,
 } from './orders.js';
-import { listStopOrders, placeStopOrder } from './stop-orders.js';
+import { renderOrderPreview, renderPlacedOrder } from './orders-render.js';
+import { listStopOrders, placeStopOrder, renderPlacedStopOrder } from './stop-orders.js';
 
 // Журнал сделок пишет в реальный ~/.config/tinvest/trades.log — в тестах глушим,
 // чтобы прогон не засорял файл пользователя (сама логика журнала — в audit.test.ts).
@@ -31,8 +32,37 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
+// Инструмент по умолчанию — акция SBER; для проверок priceType облигаций
+// тесты передают BOND_INSTRUMENT (тип 'bond' → цена в пунктах → POINT).
+const SBER_INSTRUMENT: InstrumentShort = {
+  uid: 'uid-sber',
+  figi: 'BBG004730N88',
+  ticker: 'SBER',
+  classCode: 'TQBR',
+  instrumentType: 'share',
+  name: 'Сбер Банк',
+  lot: 10,
+  apiTradeAvailableFlag: true,
+};
+
+const BOND_INSTRUMENT: InstrumentShort = {
+  uid: 'uid-bond',
+  figi: 'BBG-BOND-1',
+  ticker: 'BONDX',
+  classCode: 'TQCB',
+  isin: 'RU000A10B214',
+  instrumentType: 'bond',
+  name: 'Тест-облигация',
+  lot: 1,
+  apiTradeAvailableFlag: true,
+};
+
 // Мок клиента: собирает вызовы call и отвечает заготовками по пути метода.
-function makeApi(responses: Record<string, unknown> = {}) {
+// instrument — какую бумагу возвращает findInstrument (по тикеру/ISIN и по figi).
+function makeApi(
+  responses: Record<string, unknown> = {},
+  instrument: InstrumentShort = SBER_INSTRUMENT,
+) {
   const calls: { path: string; body: unknown }[] = [];
   const api: TradingApi = {
     async getAccounts(): Promise<GetAccountsResponse> {
@@ -43,24 +73,26 @@ function makeApi(responses: Record<string, unknown> = {}) {
       };
     },
     async findInstrument() {
-      return {
-        instruments: [
-          {
-            uid: 'uid-sber',
-            figi: 'BBG004730N88',
-            ticker: 'SBER',
-            classCode: 'TQBR',
-            instrumentType: 'share',
-            name: 'Сбер Банк',
-            lot: 10,
-            apiTradeAvailableFlag: true,
-          },
-        ],
-      };
+      return { instruments: [instrument] };
     },
     async getLastPrices() {
       return {
-        lastPrices: [{ figi: 'BBG004730N88', instrumentUid: 'uid-sber', price: { units: '300', nano: 0 } }],
+        lastPrices: [{ figi: instrument.figi, instrumentUid: instrument.uid, price: { units: '300', nano: 0 } }],
+      };
+    },
+    // Карточка облигации для рублёвого эквивалента: номинал 1000 ₽.
+    async getBondBy() {
+      return {
+        instrument: {
+          uid: instrument.uid,
+          figi: instrument.figi,
+          ticker: instrument.ticker,
+          classCode: instrument.classCode,
+          isin: instrument.isin ?? '',
+          name: instrument.name,
+          currency: 'rub',
+          nominal: { units: '1000', nano: 0, currency: 'rub' },
+        },
       };
     },
     async call<T>(path: string, body: unknown): Promise<T> {
@@ -156,10 +188,35 @@ describe('placeOrder', () => {
       direction: 'ORDER_DIRECTION_BUY',
       orderType: 'ORDER_TYPE_LIMIT',
       price: { units: '300', nano: 500000000 },
+      // Акция — цена в валюте расчётов.
+      priceType: 'PRICE_TYPE_CURRENCY',
     });
     // Ключ идемпотентности сгенерирован и отправлен.
     expect((calls[0]?.body as { orderId: string }).orderId).toMatch(/[0-9a-f-]{36}/);
     expect(view).toMatchObject({ orderId: 'srv-1', statusText: 'исполнена', totalAmount: 6000 });
+  });
+
+  it('облигация: лимитная заявка уходит с priceType POINT (цена в пунктах)', async () => {
+    // Регрессия: без PRICE_TYPE_POINT цена облигации (напр. 103.20 = % номинала)
+    // трактуется как рубли и отклоняется — «price is outside the limits».
+    const { api, calls } = makeApi(
+      { 'SandboxService/PostSandboxOrder': { orderId: 'srv-b', executionReportStatus: 'EXECUTION_REPORT_STATUS_NEW' } },
+      BOND_INSTRUMENT,
+    );
+    await placeOrder(api, {
+      mode: 'sandbox',
+      query: 'RU000A10B214',
+      lots: 15,
+      direction: 'buy',
+      limitPrice: 103.2,
+      confirm: false,
+      tradingGate: GATE_OFF,
+    });
+    expect(calls[0]?.body).toMatchObject({
+      instrumentId: 'uid-bond',
+      price: { units: '103', nano: 200000000 },
+      priceType: 'PRICE_TYPE_POINT',
+    });
   });
 
   it('без цены — рыночная заявка без поля price', async () => {
@@ -175,6 +232,8 @@ describe('placeOrder', () => {
     });
     expect(calls[0]?.body).toMatchObject({ orderType: 'ORDER_TYPE_MARKET', direction: 'ORDER_DIRECTION_SELL' });
     expect(calls[0]?.body).not.toHaveProperty('price');
+    // У рыночной заявки цены нет — priceType не отправляем (нечего трактовать).
+    expect(calls[0]?.body).not.toHaveProperty('priceType');
   });
 
   it('readonly отклоняется ДО сетевых вызовов', async () => {
@@ -332,14 +391,42 @@ describe('cancelOrder / placeStopOrder', () => {
       quantity: '3',
       stopPrice: { units: '350', nano: 0 },
       expirationType: 'STOP_ORDER_EXPIRATION_TYPE_GOOD_TILL_CANCEL',
+      // Акция — стоп-цена в валюте.
+      priceType: 'PRICE_TYPE_CURRENCY',
     });
     expect(view.stopOrderId).toBe('stop-1');
+  });
+
+  it('облигация: стоп-заявка уходит с priceType POINT (stopPrice в пунктах)', async () => {
+    const { api, calls } = makeApi({ 'SandboxService/PostSandboxStopOrder': { stopOrderId: 'stop-b' } }, BOND_INSTRUMENT);
+    await placeStopOrder(api, {
+      mode: 'sandbox',
+      query: 'RU000A10B214',
+      lots: 1,
+      kind: 'stop-loss',
+      direction: 'sell',
+      stopPrice: 99.5,
+      limitPrice: null,
+      confirm: false,
+      tradingGate: GATE_OFF,
+    });
+    expect(calls[0]?.body).toMatchObject({
+      instrumentId: 'uid-bond',
+      stopPrice: { units: '99', nano: 500000000 },
+      priceType: 'PRICE_TYPE_POINT',
+    });
   });
 });
 
 describe('replaceOrder', () => {
+  // Замена читает состояние заявки (GetOrderState) → figi → тип инструмента,
+  // чтобы задать priceType. Поэтому мок обязан вернуть figi заменяемой заявки.
+  const STATE_SBER = { 'SandboxService/GetSandboxOrderState': { figi: 'BBG004730N88' } };
+  const replaceBody = (calls: { path: string; body: unknown }[]) =>
+    calls.find((c) => c.path.endsWith('ReplaceSandboxOrder'))?.body;
+
   it('использует переданный --order-id как ключ идемпотентности (K16)', async () => {
-    const { api, calls } = makeApi({ 'SandboxService/ReplaceSandboxOrder': { orderId: 'srv-9' } });
+    const { api, calls } = makeApi({ ...STATE_SBER, 'SandboxService/ReplaceSandboxOrder': { orderId: 'srv-9' } });
     await replaceOrder(api, {
       mode: 'sandbox',
       orderId: 'ord-1',
@@ -350,13 +437,18 @@ describe('replaceOrder', () => {
       tradingGate: GATE_OFF,
     });
     // Ключ идемпотентности замены — наш, а не случайный: повтор безопасен.
-    expect(calls[0]?.body).toMatchObject({ orderId: 'ord-1', idempotencyKey: 'my-key-123' });
+    // Акция → priceType валюта.
+    expect(replaceBody(calls)).toMatchObject({
+      orderId: 'ord-1',
+      idempotencyKey: 'my-key-123',
+      priceType: 'PRICE_TYPE_CURRENCY',
+    });
   });
 
   it('направление из ответа без поля direction → null, а не «покупка» (K19)', async () => {
     // protobuf опускает незаполненный direction: замена sell-заявки не должна
     // рапортоваться как покупка.
-    const { api } = makeApi({ 'SandboxService/ReplaceSandboxOrder': { orderId: 'srv-9' } });
+    const { api } = makeApi({ ...STATE_SBER, 'SandboxService/ReplaceSandboxOrder': { orderId: 'srv-9' } });
     const view = await replaceOrder(api, {
       mode: 'sandbox',
       orderId: 'ord-1',
@@ -370,6 +462,7 @@ describe('replaceOrder', () => {
 
   it('направление sell из ответа маппится в sell (K19)', async () => {
     const { api } = makeApi({
+      ...STATE_SBER,
       'SandboxService/ReplaceSandboxOrder': { orderId: 'srv-9', direction: 'ORDER_DIRECTION_SELL' },
     });
     const view = await replaceOrder(api, {
@@ -383,12 +476,10 @@ describe('replaceOrder', () => {
     expect(view.direction).toBe('sell');
   });
 
-  it('резолвит тикер по figi из ответа, а не показывает сырой FIGI', async () => {
-    // Ответ ReplaceOrder содержит только figi (без ticker) — вывод должен
-    // показать бумагу «SBER», резолвленную через findInstrument по figi.
-    const { api } = makeApi({
-      'SandboxService/ReplaceSandboxOrder': { orderId: 'srv-9', figi: 'BBG004730N88' },
-    });
+  it('резолвит тикер по figi заявки, а не показывает сырой FIGI', async () => {
+    // GetOrderState даёт только figi (без ticker) — вывод должен показать
+    // бумагу «SBER», резолвленную через findInstrument по figi заявки.
+    const { api } = makeApi({ ...STATE_SBER, 'SandboxService/ReplaceSandboxOrder': { orderId: 'srv-9' } });
     const view = await replaceOrder(api, {
       mode: 'sandbox',
       orderId: 'ord-1',
@@ -398,6 +489,126 @@ describe('replaceOrder', () => {
       tradingGate: GATE_OFF,
     });
     expect(view.ticker).toBe('SBER');
+  });
+
+  it('облигация: замена уходит с priceType POINT (тип берётся из заявки)', async () => {
+    const { api, calls } = makeApi(
+      {
+        'SandboxService/GetSandboxOrderState': { figi: 'BBG-BOND-1' },
+        'SandboxService/ReplaceSandboxOrder': { orderId: 'srv-b' },
+      },
+      BOND_INSTRUMENT,
+    );
+    await replaceOrder(api, {
+      mode: 'sandbox',
+      orderId: 'ord-b',
+      lots: 5,
+      price: 101.5,
+      confirm: false,
+      tradingGate: GATE_OFF,
+    });
+    expect(replaceBody(calls)).toMatchObject({
+      price: { units: '101', nano: 500000000 },
+      priceType: 'PRICE_TYPE_POINT',
+    });
+  });
+
+  it('инструмент заявки не определён (нет figi) → замена отклонена ДО отправки', async () => {
+    // Без типа инструмента нельзя выбрать priceType — не угадываем валюту
+    // вместо пунктов (no-fallbacks), а падаем и не трогаем заявку.
+    const { api, calls } = makeApi({ 'SandboxService/GetSandboxOrderState': {} });
+    await expect(
+      replaceOrder(api, { mode: 'sandbox', orderId: 'ord-x', lots: 1, price: 100, confirm: false, tradingGate: GATE_OFF }),
+    ).rejects.toMatchObject({ code: 'APP_TINVEST_ORDER_INSTRUMENT_UNKNOWN' });
+    expect(calls.some((c) => c.path.endsWith('ReplaceSandboxOrder'))).toBe(false);
+  });
+});
+
+describe('единицы цены в выводе (пункты vs рубли)', () => {
+  it('предпросмотр облигации: пункты + ₽-эквивалент + предупреждение о заниженной оценке', async () => {
+    const { api } = makeApi(
+      {
+        'SandboxService/GetSandboxMaxLots': { currency: 'rub', buyLimits: { buyMaxLots: '18' } },
+        'SandboxService/GetSandboxOrderPrice': {
+          totalOrderAmount: { currency: 'rub', units: '103', nano: 970000000 },
+        },
+      },
+      BOND_INSTRUMENT,
+    );
+    const view = await previewOrder(api, {
+      mode: 'sandbox',
+      query: 'RU000A10B214',
+      lots: 1,
+      direction: 'buy',
+      limitPrice: 100.5,
+    });
+    expect(view.priceUnit).toBe('point');
+    expect(view.nominalRub).toBe(1000);
+    const text = renderOrderPreview(view);
+    expect(text).toContain('100.50 пт (≈ 1 005.00 ₽/шт)');
+    expect(text).toMatch(/занижена/); // предупреждение об оценке суммы для облигаций
+  });
+
+  it('предпросмотр акции: цена в валюте (₽), без пунктов и без предупреждения', async () => {
+    const { api } = makeApi({
+      'SandboxService/GetSandboxMaxLots': { currency: 'rub', buyLimits: { buyMaxLots: '3' } },
+      'SandboxService/GetSandboxOrderPrice': { totalOrderAmount: { currency: 'rub', units: '3003', nano: 0 } },
+    });
+    const view = await previewOrder(api, {
+      mode: 'sandbox',
+      query: 'SBER',
+      lots: 1,
+      direction: 'buy',
+      limitPrice: 300.5,
+    });
+    expect(view.priceUnit).toBe('currency');
+    const text = renderOrderPreview(view);
+    expect(text).toContain('300.50 ₽');
+    expect(text).not.toContain('пт');
+    expect(text).not.toMatch(/занижена/);
+  });
+
+  it('покупка облигации: сумма висящей заявки в пунктах помечается «пт», не рублями', async () => {
+    const { api } = makeApi(
+      {
+        'SandboxService/PostSandboxOrder': {
+          orderId: 'srv-b2',
+          executionReportStatus: 'EXECUTION_REPORT_STATUS_NEW',
+          // Ещё не исполнена → API отдаёт сумму в пунктах (currency "pt.").
+          totalOrderAmount: { currency: 'pt.', units: '100', nano: 500000000 },
+        },
+      },
+      BOND_INSTRUMENT,
+    );
+    const view = await placeOrder(api, {
+      mode: 'sandbox',
+      query: 'RU000A10B214',
+      lots: 1,
+      direction: 'buy',
+      limitPrice: 100.5,
+      confirm: false,
+      tradingGate: GATE_OFF,
+    });
+    expect(view.priceUnit).toBe('point');
+    expect(view.nominalRub).toBe(1000);
+    expect(renderPlacedOrder(view)).toContain('100.50 пт');
+  });
+
+  it('стоп по облигации: стоп-цена в пунктах с ₽-эквивалентом', async () => {
+    const { api } = makeApi({ 'SandboxService/PostSandboxStopOrder': { stopOrderId: 'stop-b2' } }, BOND_INSTRUMENT);
+    const view = await placeStopOrder(api, {
+      mode: 'sandbox',
+      query: 'RU000A10B214',
+      lots: 1,
+      kind: 'stop-loss',
+      direction: 'sell',
+      stopPrice: 99.5,
+      limitPrice: null,
+      confirm: false,
+      tradingGate: GATE_OFF,
+    });
+    expect(view.priceUnit).toBe('point');
+    expect(renderPlacedStopOrder(view)).toContain('99.50 пт (≈ 995.00 ₽/шт)');
   });
 });
 

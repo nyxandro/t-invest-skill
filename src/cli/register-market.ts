@@ -8,14 +8,24 @@
  *   волатильность, сравнение с бенчмарком (индексы IMOEX/RTSI поддержаны);
  *   instrument <query> — универсальная карточка любого актива;
  *   orderbook <query> [--depth n] — биржевой стакан: спред, ликвидность;
- *   tech <query> — RSI/SMA/MACD с нейтральными наблюдениями.
+ *   tech <query> — RSI/SMA/MACD с нейтральными наблюдениями;
+ *   schedule [exchange] [-d days] — расписание торгов площадок (сессии в МСК);
+ *   last-trades <query> [--hours n] — лента обезличенных сделок рынка.
  */
 import type { Command } from 'commander';
 import { fetchHistory, renderHistory, renderHistoryChart } from '../commands/history.js';
 import { fetchInstrumentCard, renderInstrumentCard } from '../commands/instrument.js';
+import { fetchLastTrades, renderLastTrades } from '../commands/last-trades.js';
 import { fetchOrderBook, renderOrderBook } from '../commands/orderbook.js';
+import { fetchSchedule, renderSchedule } from '../commands/schedule.js';
 import { fetchTech, renderTech } from '../commands/tech.js';
-import { DEFAULT_HISTORY_DAYS, ORDERBOOK_DEPTH_DEFAULT, ORDERBOOK_DEPTH_MAX } from '../config/config.js';
+import {
+  DEFAULT_HISTORY_DAYS,
+  LAST_TRADES_DEFAULT_HOURS,
+  ORDERBOOK_DEPTH_DEFAULT,
+  ORDERBOOK_DEPTH_MAX,
+  SCHEDULE_DEFAULT_DAYS,
+} from '../config/config.js';
 import { parsePositiveInt, runCommand, withChart } from './runtime.js';
 
 export function registerMarketCommands(program: Command): void {
@@ -71,6 +81,38 @@ export function registerMarketCommands(program: Command): void {
       runCommand(cmd, async (client, json) => {
         const view = await fetchTech(client, query, new Date());
         return json ? view : renderTech(view);
+      }),
+    );
+
+  program
+    .command('schedule')
+    .description('расписание торгов площадок: когда открыты сессии (время в МСК)')
+    .argument('[exchange]', 'площадка (например, MOEX); без неё — все доступные')
+    .option('-d, --days <n>', 'период вперёд в днях', String(SCHEDULE_DEFAULT_DAYS))
+    .action(async (exchange: string | undefined, opts: { days: string }, cmd: Command) =>
+      runCommand(cmd, async (client, json) => {
+        const view = await fetchSchedule(client, {
+          exchange,
+          days: parsePositiveInt(opts.days, '--days'),
+          now: new Date(),
+        });
+        return json ? view : renderSchedule(view);
+      }),
+    );
+
+  program
+    .command('last-trades')
+    .description('лента обезличенных сделок рынка по бумаге (оценка активности/ликвидности)')
+    .argument('<query>', 'тикер или ISIN инструмента')
+    .option('--hours <n>', 'период назад в часах', String(LAST_TRADES_DEFAULT_HOURS))
+    .action(async (query: string, opts: { hours: string }, cmd: Command) =>
+      runCommand(cmd, async (client, json) => {
+        const view = await fetchLastTrades(client, {
+          query,
+          hours: parsePositiveInt(opts.hours, '--hours'),
+          now: new Date(),
+        });
+        return json ? view : renderLastTrades(view);
       }),
     );
 }

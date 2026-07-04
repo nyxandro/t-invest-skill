@@ -20,6 +20,13 @@ import type { MoneyValue, Quotation } from './types.js';
 export type OrderDirection = 'ORDER_DIRECTION_BUY' | 'ORDER_DIRECTION_SELL';
 export type OrderType = 'ORDER_TYPE_LIMIT' | 'ORDER_TYPE_MARKET';
 
+// Тип цены заявки (enum v1PriceType контракта T-Invest API). UNSPECIFIED не
+// отправляем осознанно: для облигаций/фьючерсов неопределённый тип трактуется
+// сервером как валюта, и цена в пунктах (напр. 103.20 = 103.2 % номинала)
+// вылетает за биржевой коридор цен → «price is outside the limits» и отклонение.
+// Поэтому тип цены задаётся явно по типу инструмента (см. trading/price-type.ts).
+export type PriceType = 'PRICE_TYPE_POINT' | 'PRICE_TYPE_CURRENCY';
+
 // --- PostOrder ---
 
 export interface PostOrderRequest {
@@ -30,6 +37,18 @@ export interface PostOrderRequest {
   orderType: OrderType;
   orderId: string; // клиентский ключ идемпотентности (UUID)
   price?: Quotation; // только для лимитных заявок
+  priceType?: PriceType; // как трактовать price: пункты (облигации/фьючерсы) или валюта
+}
+
+// --- ReplaceOrder ---
+
+export interface ReplaceOrderRequest {
+  accountId: string;
+  orderId: string; // номер заменяемой заявки на бирже
+  idempotencyKey: string; // новый клиентский ключ идемпотентности
+  quantity: string;
+  price: Quotation;
+  priceType?: PriceType; // трактовка price — по типу инструмента заявки
 }
 
 export interface PostOrderResponse {
@@ -127,6 +146,9 @@ export interface PostStopOrderRequest {
   expirationType: 'STOP_ORDER_EXPIRATION_TYPE_GOOD_TILL_CANCEL';
   stopPrice: Quotation; // цена активации
   price?: Quotation; // цена лимитной заявки после активации (stop-limit)
+  // Единый тип цены на весь запрос: покрывает и stopPrice, и price. Для
+  // облигаций/фьючерсов — POINT (пункты), иначе цена уйдёт как валюта.
+  priceType?: PriceType;
   orderId: string; // клиентский ключ идемпотентности
 }
 

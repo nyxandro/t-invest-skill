@@ -117,3 +117,42 @@ export interface GetFuturesMarginResponse {
   minPriceIncrement?: Quotation; // шаг цены
   minPriceIncrementAmount?: Quotation; // стоимость шага цены
 }
+
+// --- InstrumentsService/TradingSchedules ---
+
+// Один торговый день площадки. Все времена — UTC (в выводе переводим в МСК).
+// Берём только основную и вечернюю сессии — их достаточно для ответа «когда
+// открыты торги»; аукционы/клиринг/премаркет из контракта опускаем.
+export interface TradingDay {
+  date?: string;
+  isTradingDay?: boolean;
+  startTime?: string; // начало основной сессии
+  endTime?: string; // конец основной сессии
+  eveningStartTime?: string; // начало вечерней сессии (если есть)
+  eveningEndTime?: string;
+}
+
+export interface TradingSchedule {
+  exchange?: string;
+  days?: TradingDay[];
+}
+
+export interface TradingSchedulesResponse {
+  exchanges?: TradingSchedule[];
+}
+
+// --- MarketDataService/GetLastTrades ---
+
+// Обезличенная сделка из ленты рынка. Цена — за 1 инструмент в его котировке
+// (для облигаций/фьючерсов — в пунктах), quantity — в лотах.
+export interface MarketTrade {
+  direction?: string; // TRADE_DIRECTION_BUY | _SELL | _UNSPECIFIED
+  price?: Quotation;
+  quantity?: string; // лоты, int64 → string
+  time?: string; // UTC
+  tradeSource?: string; // TRADE_SOURCE_EXCHANGE | _DEALER | ...
+}
+
+export interface GetLastTradesResponse {
+  trades?: MarketTrade[];
+}

@@ -35,10 +35,12 @@ import type {
   CandleInterval,
   GetCandlesResponse,
   GetFuturesMarginResponse,
+  GetLastTradesResponse,
   GetOrderBookResponse,
   GetTechAnalysisResponse,
   GetTradingStatusResponse,
   TechAnalysisRequest,
+  TradingSchedulesResponse,
 } from './types-market.js';
 import type {
   GetAssetReportsResponse,
@@ -50,6 +52,7 @@ import type {
 } from './types-info.js';
 import type {
   BondResponse,
+  CloseSandboxAccountResponse,
   FindInstrumentResponse,
   GetAccountsResponse,
   GetAssetFundamentalsResponse,
@@ -59,6 +62,7 @@ import type {
   GetInstrumentByResponse,
   GetLastPricesResponse,
   GetOperationsByCursorResponse,
+  GetSandboxAccountsResponse,
   GetWithdrawLimitsResponse,
   OpenSandboxAccountResponse,
   PortfolioResponse,
@@ -246,6 +250,24 @@ export class TInvestClient {
     return this.call('MarketDataService/GetTechAnalysis', request);
   }
 
+  getTradingSchedules(
+    exchange: string | undefined,
+    from: string,
+    to: string,
+  ): Promise<TradingSchedulesResponse> {
+    // Расписание торгов: без exchange API вернёт все площадки. from/to — период.
+    return this.call('InstrumentsService/TradingSchedules', {
+      ...(exchange ? { exchange } : {}),
+      from,
+      to,
+    });
+  }
+
+  getLastTrades(instrumentId: string, from: string, to: string): Promise<GetLastTradesResponse> {
+    // Лента обезличенных сделок за период (from/to обязательны по контракту).
+    return this.call('MarketDataService/GetLastTrades', { instrumentId, from, to });
+  }
+
   getFuturesMargin(instrumentId: string): Promise<GetFuturesMarginResponse> {
     // Гарантийное обеспечение фьючерса — сколько реально блокируется на счёте.
     return this.call('InstrumentsService/GetFuturesMargin', { instrumentId });
@@ -306,6 +328,16 @@ export class TInvestClient {
   openSandboxAccount(): Promise<OpenSandboxAccountResponse> {
     // Работает только на контуре песочницы (см. baseUrlForMode в конфиге).
     return this.call('SandboxService/OpenSandboxAccount', {});
+  }
+
+  getSandboxAccounts(): Promise<GetSandboxAccountsResponse> {
+    // Список счетов песочницы (контракт совпадает с UsersService/GetAccounts).
+    return this.call('SandboxService/GetSandboxAccounts', {});
+  }
+
+  closeSandboxAccount(accountId: string): Promise<CloseSandboxAccountResponse> {
+    // Закрытие виртуального счёта песочницы: удаляет счёт и его позиции.
+    return this.call('SandboxService/CloseSandboxAccount', { accountId });
   }
 
   sandboxPayIn(accountId: string, amountRub: number): Promise<SandboxPayInResponse> {

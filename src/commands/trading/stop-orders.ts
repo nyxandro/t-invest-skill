@@ -11,7 +11,9 @@
  */
 import { randomUUID } from 'node:crypto';
 import { AppError } from '../../api/errors.js';
-import { formatAmount, moneyToNumberOrNull, numberToQuotation } from '../../api/money.js';
+import { moneyToNumberOrNull, numberToQuotation } from '../../api/money.js';
+import { formatInstrumentPrice, priceUnitFor, type PriceUnit } from '../../format/units.js';
+import { resolvePricingContext } from './pricing-context.js';
 import type {
   CancelStopOrderResponse,
   GetStopOrdersResponse,
@@ -30,6 +32,7 @@ import { mapWithConcurrency } from '../../util/concurrency.js';
 import { resolveAccountId } from '../resolve-account.js';
 import { resolveLabelByFigi } from '../resolve-instrument.js';
 import { assertMutationAllowed, tradingPathsForMode } from './paths.js';
+import { priceTypeFor } from './price-type.js';
 import { resolveTradeInstrument, type TradeDirection, type TradingApi } from './orders.js';
 
 export type StopOrderKind = 'take-profit' | 'stop-loss' | 'stop-limit';
@@ -48,6 +51,8 @@ export interface PlacedStopOrderView {
   lots: number;
   stopPrice: number;
   limitPrice: number | null;
+  priceUnit: PriceUnit; // единица stopPrice/limitPrice: 'point' (облигации/фьючерсы) | 'currency'
+  nominalRub: number | null; // номинал для ₽-эквивалента (иначе null)
 }
 
 export async function placeStopOrder(
@@ -82,6 +87,9 @@ export async function placeStopOrder(
   ]);
 
   const clientOrderId = params.orderId ?? randomUUID();
+  // priceType по типу инструмента — единый на весь запрос, покрывает и stopPrice
+  // (цену активации), и price (лимит после активации). Для облигаций/фьючерсов
+  // это пункты; без него цены уходят как валюта и стоп по облигации некорректен.
   const request: PostStopOrderRequest = {
     accountId,
     instrumentId: instrument.uid,
@@ -90,6 +98,7 @@ export async function placeStopOrder(
     stopOrderType: STOP_TYPE_BY_KIND[params.kind],
     expirationType: 'STOP_ORDER_EXPIRATION_TYPE_GOOD_TILL_CANCEL',
     stopPrice: numberToQuotation(params.stopPrice),
+    priceType: priceTypeFor(instrument.instrumentType),
     ...(params.limitPrice !== null ? { price: numberToQuotation(params.limitPrice) } : {}),
     orderId: clientOrderId,
   };
@@ -98,6 +107,8 @@ export async function placeStopOrder(
     `Ключ идемпотентности стоп-заявки: ${clientOrderId}. Для повтора: --order-id ${clientOrderId}`,
   );
   const resp = await api.call<PostStopOrderResponse>(paths.postStopOrder, request);
+  // Единица цены и номинал (₽-эквивалент) по уже резолвленному инструменту.
+  const pricing = await resolvePricingContext(api, instrument.instrumentType, instrument.uid);
   const view: PlacedStopOrderView = {
     stopOrderId: resp.stopOrderId ?? null,
     ticker: instrument.ticker,
@@ -106,6 +117,8 @@ export async function placeStopOrder(
     lots: params.lots,
     stopPrice: params.stopPrice,
     limitPrice: params.limitPrice,
+    priceUnit: pricing.priceUnit,
+    nominalRub: pricing.nominalRub,
   };
   appendTradeAudit({
     at: new Date().toISOString(),
@@ -131,9 +144,15 @@ export interface StopOrderView {
   limitPrice: number | null;
   createDate: string | null;
   status: string | null;
+  priceUnit: PriceUnit; // единица stopPrice/limitPrice: 'point' (облигации/фьючерсы) | 'currency'
 }
 
-export function toStopOrderView(info: StopOrderInfo): StopOrderView {
+// pricing по умолчанию — валюта: инструмент не резолвлен или это акция/фонд.
+// Облигации/фьючерсы помечает listStopOrders по типу, резолвленному по figi.
+export function toStopOrderView(
+  info: StopOrderInfo,
+  pricing: { priceUnit: PriceUnit } = { priceUnit: 'currency' },
+): StopOrderView {
   // Лимитная цена: у тейк-профита/стоп-лосса её нет, приходит нулём — трактуем
   // ноль как «нет лимита» (в отличие от stopPrice, где ноль был бы данными).
   const limit = moneyToNumberOrNull(info.price);
@@ -146,6 +165,7 @@ export function toStopOrderView(info: StopOrderInfo): StopOrderView {
     limitPrice: limit !== null && limit !== 0 ? limit : null,
     createDate: info.createDate ?? null,
     status: info.status ?? null,
+    priceUnit: pricing.priceUnit,
   };
 }
 
@@ -162,7 +182,9 @@ export async function listStopOrders(
   // ловить 429) и терпим сбой одной карточки: тикер — презентационное поле,
   // при неудаче остаётся figi (политика no-fallbacks её не покрывает).
   const uniqueFigis = [...new Set(infos.map((i) => i.figi).filter((f): f is string => Boolean(f)))];
-  const tickerByFigi = new Map<string, string>();
+  // По figi достаём и тикер (для читаемости), и тип инструмента → единицу цены
+  // (чтобы стоп-цена облигации помечалась «пт», а не выглядела как рубли).
+  const metaByFigi = new Map<string, { ticker: string; priceUnit: PriceUnit }>();
   if (uniqueFigis.length > 0) {
     await mapWithConcurrency(
       uniqueFigis,
@@ -171,11 +193,11 @@ export async function listStopOrders(
         try {
           const label = await resolveLabelByFigi(api, figi);
           if (label) {
-            tickerByFigi.set(figi, label.ticker);
+            metaByFigi.set(figi, { ticker: label.ticker, priceUnit: priceUnitFor(label.instrumentType) });
           }
         } catch (err) {
           console.error(
-            `Предупреждение: не удалось получить тикер по FIGI ${figi}: ${err instanceof Error ? err.message : String(err)}`,
+            `Предупреждение: не удалось получить тикер/единицу цены по FIGI ${figi}: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
         return null;
@@ -183,9 +205,9 @@ export async function listStopOrders(
     );
   }
   return infos.map((info) => {
-    const view = toStopOrderView(info);
-    const ticker = info.figi ? tickerByFigi.get(info.figi) : undefined;
-    return ticker ? { ...view, ticker } : view;
+    const meta = info.figi ? metaByFigi.get(info.figi) : undefined;
+    const view = toStopOrderView(info, { priceUnit: meta?.priceUnit ?? 'currency' });
+    return meta ? { ...view, ticker: meta.ticker } : view;
   });
 }
 
@@ -223,10 +245,12 @@ export function renderPlacedStopOrder(view: PlacedStopOrderView): string {
     'stop-loss': 'стоп-лосс',
     'stop-limit': 'стоп-лимит',
   };
+  // Детальный вывод: стоп-цена и лимит с меткой единицы и ₽-эквивалентом (B).
+  const priceOpts = { unit: view.priceUnit, nominalRub: view.nominalRub, currency: null };
   return [
     `Стоп-заявка (${kindLabels[view.kind]}) по ${view.ticker} выставлена: ${view.stopOrderId ?? DASH}`,
-    `${directionLabel(view.direction)} ${view.lots} лот(ов) при цене ${formatAmount(view.stopPrice)}` +
-      (view.limitPrice !== null ? `, лимит ${formatAmount(view.limitPrice)}` : ''),
+    `${directionLabel(view.direction)} ${view.lots} лот(ов) при цене ${formatInstrumentPrice(view.stopPrice, priceOpts)}` +
+      (view.limitPrice !== null ? `, лимит ${formatInstrumentPrice(view.limitPrice, priceOpts)}` : ''),
   ].join('\n');
 }
 
@@ -241,8 +265,13 @@ export function renderStopOrders(views: StopOrderView[]): string {
       v.ticker ?? DASH,
       directionLabel(v.direction),
       v.lots !== null ? String(v.lots) : DASH,
-      v.stopPrice !== null ? formatAmount(v.stopPrice) : DASH,
-      v.limitPrice !== null ? formatAmount(v.limitPrice) : DASH,
+      // В таблице — метка единицы без ₽-эквивалента (nominalRub не тянем на список).
+      v.stopPrice !== null
+        ? formatInstrumentPrice(v.stopPrice, { unit: v.priceUnit, nominalRub: null, currency: null })
+        : DASH,
+      v.limitPrice !== null
+        ? formatInstrumentPrice(v.limitPrice, { unit: v.priceUnit, nominalRub: null, currency: null })
+        : DASH,
       // Дата создания — в МСК (createDate приходит в UTC).
       v.createDate ? formatMoscowDate(v.createDate) : DASH,
     ]),

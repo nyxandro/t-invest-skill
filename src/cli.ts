@@ -19,6 +19,7 @@
  * Глобальный флаг --json — машиночитаемый вывод (для скилла и интеграций).
  */
 import { Command } from 'commander';
+import { APP_VERSION } from './config/config.js';
 import { registerAnalyticsCommands } from './cli/register-analytics.js';
 import { registerCoreCommands } from './cli/register-core.js';
 import { registerInfoCommands } from './cli/register-info.js';
@@ -34,7 +35,7 @@ const program = new Command();
 program
   .name('tinvest')
   .description('CLI для Т-Инвестиций (T-Invest API): портфель, котировки, поиск, операции')
-  .version('1.0.0')
+  .version(APP_VERSION)
   .option('--json', 'вывод в формате JSON (для интеграций и скилла)')
   .option(
     '-m, --mode <mode>',

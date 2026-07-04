@@ -8,11 +8,15 @@
  *   session status — активный режим, доступность токенов и гейт торговли
  *     (единый источник правды для агента после потери контекста);
  *   session end — снять фиксацию режима;
- *   sandbox init [--amount N] — открыть и пополнить счёт в песочнице.
+ *   sandbox init [--amount N] — открыть и пополнить счёт в песочнице;
+ *   sandbox accounts — список счетов песочницы;
+ *   sandbox close <id> — закрыть счёт песочницы.
  */
 import type { Command } from 'commander';
 import { AppError } from '../api/errors.js';
 import { formatMoney } from '../api/money.js';
+import { buildAccountViews, renderAccounts } from '../commands/accounts.js';
+import { checkForUpdate } from '../commands/update-check.js';
 import {
   DEFAULT_SANDBOX_PAYIN_RUB,
   GLOBAL_ENV_PATH,
@@ -21,6 +25,7 @@ import {
   resolveModeAndToken,
   resolveTradingGate,
   tokenAvailability,
+  type TInvestMode,
   type TradingGate,
 } from '../config/config.js';
 import { SESSION_ID_ENV_VAR, activeModeStatePath } from '../config/session-identity.js';
@@ -33,6 +38,17 @@ const STONKS_WARNING =
   '⚠️ Включён stonks-режим (T_INVEST_STONKS_MODE): агент может совершать сделки реальными ' +
   'деньгами БЕЗ подтверждений. Вы передаёте полный автономный доступ к счёту — ответственность ' +
   'на вас, это небезопасно.';
+
+// Команды песочницы имеют смысл только на её контуре: в других режимах они
+// обращались бы к боевому счёту (или падали), поэтому — жёсткий guard.
+function assertSandboxMode(mode: TInvestMode, command: string): void {
+  if (mode !== 'sandbox') {
+    throw new AppError({
+      code: 'APP_TINVEST_SANDBOX_ONLY',
+      userMessage: `Команда «${command}» доступна только в режиме песочницы. Зафиксируйте режим: session start --mode sandbox.`,
+    });
+  }
+}
 
 // Строка про состояние реальных сделок для человекочитаемого вывода.
 function tradingStatusLine(gate: TradingGate): string {
@@ -86,13 +102,16 @@ export function registerSessionCommands(program: Command): void {
     .command('status')
     .description('показать активный режим, доступность токенов и состояние гейта торговли')
     .action(async (_opts: unknown, cmd: Command) =>
-      runSessionCommand(cmd, (json) => {
+      runSessionCommand(cmd, async (json) => {
         const state = readActiveMode(activeModeStatePath(process.env));
         // Доступность токенов нужна скиллу для «живого» списка режимов.
         const tokens = tokenAvailability(process.env);
         const gate = resolveTradingGate(process.env);
         const sessionId = process.env[SESSION_ID_ENV_VAR]?.trim() || null;
         const warning = gate.stonksMode ? STONKS_WARNING : null;
+        // Проверка новой версии скилла (кэш сутки, тихий пропуск при сбое) —
+        // session status вызывается в начале диалога, это естественная точка.
+        const update = await checkForUpdate();
         if (json) {
           return {
             active: state !== null,
@@ -104,6 +123,9 @@ export function registerSessionCommands(program: Command): void {
             stonksMode: gate.stonksMode,
             warning,
             tokenEnvPath: GLOBAL_ENV_PATH,
+            currentVersion: update.currentVersion,
+            latestVersion: update.latestVersion,
+            updateAvailable: update.updateAvailable,
           };
         }
         const tokensLine = (Object.entries(tokens) as [string, boolean][])
@@ -112,9 +134,20 @@ export function registerSessionCommands(program: Command): void {
         const modeLine = state
           ? `Активный режим: «${state.mode}» (зафиксирован ${state.startedAt}).`
           : 'Активный режим не выбран — выполните «session start» (по умолчанию readonly).';
-        // warning отфильтровываем: в человекочитаемом выводе он появляется только
-        // когда включён stonks.
-        return [modeLine, `Токены: ${tokensLine}`, tradingStatusLine(gate), warning, `Файл токенов: ${GLOBAL_ENV_PATH}`]
+        // Строку об обновлении добавляем ТОЛЬКО когда апдейт есть — нет обновы,
+        // нет и лишнего вывода. warning — только при stonks.
+        const updateLine = update.updateAvailable
+          ? `🔔 Доступна новая версия скилла: ${update.latestVersion} (у вас ${update.currentVersion}). ` +
+            'Обновить: curl -fsSL https://raw.githubusercontent.com/nyxandro/t-invest-skill/main/install.sh | bash'
+          : null;
+        return [
+          modeLine,
+          `Токены: ${tokensLine}`,
+          tradingStatusLine(gate),
+          warning,
+          `Файл токенов: ${GLOBAL_ENV_PATH}`,
+          updateLine,
+        ]
           .filter(Boolean)
           .join('\n');
       }),
@@ -143,20 +176,41 @@ export function registerSessionCommands(program: Command): void {
     .option('--amount <rub>', 'сумма пополнения в рублях', String(DEFAULT_SANDBOX_PAYIN_RUB))
     .action(async (opts: { amount: string }, cmd: Command) =>
       runCommand(cmd, async (client, json, mode) => {
-        // Команда меняет состояние песочницы — в других режимах она бессмысленна
-        // и потенциально опасна, поэтому жёсткий guard.
-        if (mode !== 'sandbox') {
-          throw new AppError({
-            code: 'APP_TINVEST_SANDBOX_ONLY',
-            userMessage: 'Команда «sandbox init» доступна только в режиме песочницы. Зафиксируйте режим: session start --mode sandbox.',
-          });
-        }
+        assertSandboxMode(mode, 'sandbox init');
         const amount = parsePositiveInt(opts.amount, '--amount', MAX_SANDBOX_PAYIN_RUB);
         const { accountId } = await client.openSandboxAccount();
         const { balance } = await client.sandboxPayIn(accountId, amount);
         return json
           ? { accountId, balance }
           : `Счёт песочницы открыт: ${accountId}\nБаланс после пополнения: ${formatMoney(balance)}`;
+      }),
+    );
+
+  sandbox
+    .command('accounts')
+    .description('список счетов в песочнице')
+    .action(async (_opts: unknown, cmd: Command) =>
+      runCommand(cmd, async (client, json, mode) => {
+        assertSandboxMode(mode, 'sandbox accounts');
+        const views = buildAccountViews(await client.getSandboxAccounts());
+        if (json) {
+          return views;
+        }
+        return views.length > 0
+          ? renderAccounts(views)
+          : 'В песочнице нет счетов. Откройте счёт: sandbox init.';
+      }),
+    );
+
+  sandbox
+    .command('close')
+    .description('закрыть счёт в песочнице (виртуальный; удаляет счёт и его позиции)')
+    .argument('<accountId>', 'идентификатор счёта песочницы (см. sandbox accounts)')
+    .action(async (accountId: string, _opts: unknown, cmd: Command) =>
+      runCommand(cmd, async (client, json, mode) => {
+        assertSandboxMode(mode, 'sandbox close');
+        await client.closeSandboxAccount(accountId);
+        return json ? { closed: accountId } : `Счёт песочницы ${accountId} закрыт.`;
       }),
     );
 }
