@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="assets/banner.png" alt="t-invest — Т.Инвестиции agent skill" width="100%">
+  <img src="assets/banner.png" alt="t-invest — скилл Т-Инвестиций для ИИ-агента" width="100%">
 </p>
 
-# t-invest-skill — CLI + скилл для доступа к Т-Инвестициям
+# t-invest-skill — скилл и CLI для Т-Инвестиций: брокерский счёт для ИИ-агента
 
 <p align="center">
-  <a href="https://github.com/nyxandro/t-invest-skill/raw/main/t-invest.skill"><img src="https://img.shields.io/badge/%E2%AC%87%20%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20%D1%81%D0%BA%D0%B8%D0%BB%D0%BB-t--invest.skill-2ea44f?style=for-the-badge" alt="Скачать скилл"></a>
+  <a href="https://github.com/nyxandro/t-invest-skill/raw/main/t-invest.skill"><img src="https://img.shields.io/badge/%E2%AC%87%20%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20%D1%81%D0%BA%D0%B8%D0%BB%D0%BB-t--invest.skill-2ea44f?style=for-the-badge" alt="Скачать скилл t-invest"></a>
   <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/%F0%9F%93%8B%20Changelog-v1.1.0-1f6feb?style=for-the-badge" alt="Changelog"></a>
 </p>
 
@@ -52,6 +52,16 @@
 Нужно: **Node.js ≥ 20** (единственная внешняя зависимость — весь код вшит в один
 файл, npm-пакеты и сборка не требуются) и агент, умеющий читать `SKILL.md` и
 запускать shell-команды.
+
+**Claude Code — плагином** из [nyxandro/skills](https://github.com/nyxandro/skills), каталога моих скиллов:
+
+```text
+/plugin install t-invest --marketplace nyxandro/skills
+```
+
+Шаблон `~/.config/tinvest/.env` плагин не создаёт: заведите его, как в разделе
+[«Токены и режимы»](#токены-и-режимы). Выберите один способ установки: при двух Claude Code
+загрузит скилл дважды.
 
 **Быстро — одной командой (Linux / macOS / WSL).** Скачает скилл и распакует его
 в каталоги скиллов (`~/.agents/skills/` — общий для агентов, `~/.claude/skills/` —
